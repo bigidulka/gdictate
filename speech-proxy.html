@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Speech Proxy</title>
+<style>
+body { font-family: system-ui; padding: 20px; background: #1a1a2e; color: #eee; }
+#status { padding: 8px; border-radius: 4px; margin-bottom: 10px; background: #16213e; }
+#transcript { font-size: 18px; min-height: 40px; padding: 10px; background: #0f3460; border-radius: 4px; }
+button { padding: 12px 24px; font-size: 16px; cursor: pointer; border: none; border-radius: 6px;
+         background: #e94560; color: white; margin: 10px 4px; }
+button:hover { background: #c81d4e; }
+.interim { color: #aaa; font-style: italic; }
+.final { color: #0f0; }
+</style>
+</head>
+<body>
+<div id="status">Connecting...</div>
+<button id="startBtn" onclick="manualStart()">Start Listening</button>
+<button id="stopBtn" onclick="manualStop()">Stop</button>
+<div id="transcript"></div>
+
+<script>
+const WS_PORT = location.port || 9876;
+const LANG = new URLSearchParams(location.search).get('lang') || 'ru-RU';
+
+let ws = null;
+let recognition = null;
+let isListening = false;
+
+function log(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://localhost:${WS_PORT}/ws`);
+
+  ws.onopen = () => {
+    log('Connected. Click "Start Listening" or wait for hotkey.');
+    ws.send(JSON.stringify({ type: 'ready', lang: LANG }));
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'start') startRecognition(msg.lang || LANG);
+    else if (msg.type === 'stop') stopRecognition();
+    else if (msg.type === 'ping') ws.send(JSON.stringify({ type: 'pong' }));
+  };
+
+  ws.onclose = () => { log('Disconnected'); setTimeout(connectWS, 1000); };
+  ws.onerror = () => ws.close();
+}
+
+function manualStart() { startRecognition(LANG); }
+function manualStop() { stopRecognition(); }
+
+function startRecognition(lang) {
+  if (isListening) stopRecognition();
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    if (ws) ws.send(JSON.stringify({ type: 'error', error: 'not-supported' }));
+    log('SpeechRecognition not supported');
+    return;
+  }
+
+  recognition = new SR();
+  recognition.lang = lang;
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+
+  recognition.onstart = () => {
+    isListening = true;
+    window._recStartTime = Date.now();
+    log('● Listening (' + lang + ')...');
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'started' }));
+  };
+
+  recognition.onresult = (event) => {
+    let finalText = '';
+    let interimText = '';
+    let lastFinalConf = 0;
+    let newFinal = '';
+
+    for (let i = 0; i < event.results.length; i++) {
+      const r = event.results[i];
+      const t = r[0].transcript;
+      if (r.isFinal) {
+        finalText += t + ' ';
+        if (i >= event.resultIndex) {
+          newFinal += t + ' ';
+          lastFinalConf = r[0].confidence;
+        }
+      } else {
+        interimText += t;
+      }
+    }
+
+    // Send new final chunks to Python
+    if (newFinal.trim() && ws && ws.readyState === 1)
+      ws.send(JSON.stringify({ type: 'final', text: newFinal.trim(), confidence: lastFinalConf }));
+
+    // Send full accumulated text as interim for OSD
+    const fullText = (finalText + interimText).trim().replace(/\s+/g, ' ');
+    if (fullText && ws && ws.readyState === 1)
+      ws.send(JSON.stringify({ type: 'interim', text: fullText }));
+
+    document.getElementById('transcript').innerHTML =
+      `<span class="final">${finalText}</span><span class="interim">${interimText}</span>`;
+  };
+
+  recognition.onerror = (event) => {
+    if (ws && ws.readyState === 1)
+      ws.send(JSON.stringify({ type: 'error', error: event.error, message: event.message || '' }));
+
+    if (event.error === 'not-allowed') {
+      log('Permission denied — click "Start Listening" to grant permission');
+      isListening = false;
+    } else if (event.error === 'network') {
+      log('Network error — check internet connection');
+    } else if (event.error === 'audio-capture') {
+      log('No microphone found');
+    }
+  };
+
+  recognition.onend = () => {
+    const elapsed = Date.now() - (window._recStartTime || 0);
+    if (ws && ws.readyState === 1)
+      ws.send(JSON.stringify({ type: 'debug', msg: 'onend after ' + elapsed + 'ms' }));
+    if (isListening) {
+      try { recognition.start(); } catch(e) {
+        if (ws && ws.readyState === 1)
+          ws.send(JSON.stringify({ type: 'debug', msg: 'restart failed: ' + e.message }));
+      }
+    } else {
+      log('Stopped');
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'stopped' }));
+    }
+  };
+
+  try { recognition.start(); }
+  catch(e) {
+    if (ws && ws.readyState === 1)
+      ws.send(JSON.stringify({ type: 'error', error: e.message }));
+  }
+}
+
+function stopRecognition() {
+  isListening = false;
+  if (recognition) { try { recognition.stop(); } catch(e) {} recognition = null; }
+  log('Stopped');
+}
+
+connectWS();
+</script>
+</body>
+</html>
