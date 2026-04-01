@@ -627,11 +627,22 @@ async def run_evdev(dictation: Dictation, key_combo: str):
 
     print(f"[BIND] {key_combo} ({len(kbs)} kb)\n", flush=True)
 
-    pressed = set()
     last = 0.0
+    toggling = False
+
+    async def do_toggle():
+        nonlocal toggling
+        if toggling:
+            return
+        toggling = True
+        try:
+            await dictation.toggle()
+        finally:
+            toggling = False
 
     async def read(dev):
-        nonlocal pressed, last
+        nonlocal last
+        pressed = set()  # per-device pressed state
         try:
             async for ev in dev.async_read_loop():
                 if ev.type != ecodes.EV_KEY:
@@ -645,7 +656,7 @@ async def run_evdev(dictation: Dictation, key_combo: str):
                 now = time.monotonic()
                 if ok and ev.value == 1 and (now - last) > 0.3:
                     last = now
-                    await dictation.toggle()
+                    asyncio.ensure_future(do_toggle())
         except OSError:
             pass  # device disconnected
 
