@@ -5,7 +5,7 @@ Uses KDE Plasma OSD when available, falls back to notify-send."""
 import shutil
 import subprocess
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -26,28 +26,43 @@ _HAS_NOTIFY = shutil.which("notify-send") is not None
 
 
 class OverlayPopup:
-    """Shows dictation text via KDE OSD or notify-send fallback."""
+    """Shows dictation text via KDE OSD or notify-send fallback.
+
+    notify-send uses x-canonical-private-synchronous hint to replace
+    the previous notification instead of stacking them."""
+
+    def _notify(self, text: str, icon: str = "audio-input-microphone", timeout: int = 3000):
+        if not _HAS_NOTIFY:
+            return
+        subprocess.Popen(
+            [
+                "notify-send", "-t", str(timeout),
+                "-h", "string:x-canonical-private-synchronous:gdictate",
+                "-i", icon, "gdictate", text,
+            ],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
 
     def show_interim(self, text: str):
         if _HAS_KDE_OSD:
             _osd.showText("audio-input-microphone", text)
-        # notify-send is too spammy for interim — skip
+        else:
+            self._notify(text)
 
     def show_final(self, text: str):
         if _HAS_KDE_OSD:
             _osd.showText("dialog-ok", text)
-        elif _HAS_NOTIFY:
-            subprocess.Popen(
-                ["notify-send", "-t", "2000", "-i", "dialog-ok", "gdictate", text],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+        else:
+            self._notify(text, icon="dialog-ok", timeout=2000)
 
     def hide_popup(self):
         pass  # auto-hides
 
 
 class DictationTray(QSystemTrayIcon):
-    """System tray icon with state-colored indicator."""
+    """System tray icon with state-colored indicator. Left-click toggles dictation."""
+
+    toggle_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -59,10 +74,16 @@ class DictationTray(QSystemTrayIcon):
         self.setIcon(self._icons["idle"])
         self.setToolTip("gdictate — idle")
 
+        self.activated.connect(self._on_activated)
+
         menu = QMenu()
         menu.addAction("Quit", QApplication.quit)
         self.setContextMenu(menu)
         self.show()
+
+    def _on_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:  # left click
+            self.toggle_requested.emit()
 
     @staticmethod
     def _make_icon(color: QColor) -> QIcon:

@@ -16,10 +16,11 @@ Chrome runs minimized and hidden from taskbar/Alt+Tab. It only serves as a bridg
 
 ## Features
 
-- **Streaming transcription** — see words as you speak (KDE Plasma OSD)
-- **System tray icon** — colored status indicator (gray=idle, red=recording, orange=finalizing)
+- **Streaming transcription** — see words as you speak (KDE OSD / notify-send on GNOME, Sway, Hyprland)
+- **System tray icon** — colored status indicator + left-click to toggle recording
 - **Global hotkey** — configurable key combo via evdev (default: Ctrl+Alt)
 - **Auto-paste** — result pasted into focused window via clipboard
+- **Auto-setup** — detects microphone, browser permissions, DE, and configures everything on first run
 - **Zero cost** — uses Google Speech through Chrome, no API keys or accounts
 
 ## Requirements
@@ -33,7 +34,7 @@ Chrome runs minimized and hidden from taskbar/Alt+Tab. It only serves as a bridg
 ## Quick start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/gdictate.git
+git clone https://github.com/bigidulka/gdictate.git
 cd gdictate
 ./install.sh        # installs deps (Arch Linux)
 python gdictate.py  # that's it
@@ -77,7 +78,7 @@ python gdictate.py --lang uk-UA    # Ukrainian
 |---|---|
 | Arch + KDE Plasma 6 + Wayland | Tested, full OSD + tray |
 | Fedora / Ubuntu + KDE + Wayland | `./install.sh` supported, full OSD + tray |
-| GNOME / Sway / Hyprland + Wayland | Works — tray icon + notify-send for final text |
+| GNOME / Sway / Hyprland + Wayland | Works — tray icon + notify-send for streaming & final text |
 | X11 | Not supported (uses wl-copy, ydotool on Wayland) |
 | macOS / Windows | Not supported |
 
@@ -99,7 +100,7 @@ python gdictate.py --lang uk-UA    # Ukrainian
 
 **Files:**
 - `gdictate.py` — main daemon: WebSocket server, Chrome launcher, hotkey listener, paste
-- `overlay.py` — KDE Plasma OSD overlay + system tray icon
+- `overlay.py` — OSD overlay (KDE native / notify-send fallback) + system tray icon with click-to-toggle
 - `speech-proxy.html` — Chrome page running `webkitSpeechRecognition`
 
 ## License

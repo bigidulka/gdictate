@@ -632,19 +632,22 @@ async def run_evdev(dictation: Dictation, key_combo: str):
 
     async def read(dev):
         nonlocal pressed, last
-        async for ev in dev.async_read_loop():
-            if ev.type != ecodes.EV_KEY:
-                continue
-            if ev.value == 1:
-                pressed.add(ev.code)
-            elif ev.value == 0:
-                pressed.discard(ev.code)
+        try:
+            async for ev in dev.async_read_loop():
+                if ev.type != ecodes.EV_KEY:
+                    continue
+                if ev.value == 1:
+                    pressed.add(ev.code)
+                elif ev.value == 0:
+                    pressed.discard(ev.code)
 
-            ok = all(any(k in pressed for k in ks) for ks in grouped.values())
-            now = time.monotonic()
-            if ok and ev.value == 1 and (now - last) > 0.3:
-                last = now
-                await dictation.toggle()
+                ok = all(any(k in pressed for k in ks) for ks in grouped.values())
+                now = time.monotonic()
+                if ok and ev.value == 1 and (now - last) > 0.3:
+                    last = now
+                    await dictation.toggle()
+        except OSError:
+            pass  # device disconnected
 
     tasks = [asyncio.create_task(read(kb)) for kb in kbs]
     await asyncio.gather(*tasks)
@@ -690,6 +693,12 @@ async def main(args, overlay=None, tray=None):
             return
 
     await d.init()
+
+    # Connect tray left-click to toggle
+    if tray:
+        def on_tray_toggle():
+            asyncio.ensure_future(d.toggle())
+        tray.toggle_requested.connect(on_tray_toggle)
 
     if args.test:
         print("=== TEST: 5s ===", flush=True)
