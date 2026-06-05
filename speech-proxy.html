@@ -122,6 +122,7 @@ function startRecognition(lang) {
       log('Network error — check internet connection');
     } else if (event.error === 'audio-capture') {
       log('No microphone found');
+      isListening = false;
     }
   };
 
