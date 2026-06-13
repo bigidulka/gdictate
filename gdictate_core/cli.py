@@ -174,6 +174,7 @@ async def main(args, overlay=None, tray=None) -> None:
             print("\n[SETUP] First run — opening Chrome to grant microphone permission.", flush=True)
             print("        Click 'Allow' when prompted, then close Chrome.\n", flush=True)
             await dictation.init(setup_mode=True)
+            await dictation.start_recording("mic")
             print("[SETUP] Waiting for permission... (Ctrl+C when done)\n", flush=True)
             try:
                 while not is_browser_configured(settings.chrome.profile_dir):
@@ -237,6 +238,23 @@ async def daemon_main(args, overlay=None, tray=None) -> None:
     dictation = None
 
     try:
+        need_setup = settings.chrome.setup_required or not is_browser_configured(settings.chrome.profile_dir)
+        if need_setup:
+            print("[SETUP] Microphone permission missing; opening Chrome setup window.", flush=True)
+            print("[SETUP] Click 'Allow' for microphone access. Daemon will continue after permission is saved.", flush=True)
+            setup_dictation = make_dictation(settings, args)
+            try:
+                await setup_dictation.init(setup_mode=True)
+                await setup_dictation.start_recording("mic")
+                deadline = asyncio.get_running_loop().time() + 180
+                while not is_browser_configured(settings.chrome.profile_dir):
+                    if asyncio.get_running_loop().time() >= deadline:
+                        raise RuntimeError("microphone permission not granted; run gdictate with --setup")
+                    await asyncio.sleep(1)
+            finally:
+                await setup_dictation.close()
+            print("[SETUP] Microphone permission granted.", flush=True)
+
         dictation = make_dictation(settings, args)
         dictation.overlay = overlay
         dictation.tray = tray
@@ -313,7 +331,15 @@ async def control_command(args) -> None:
 
 async def daemon_hotkeys_main(args) -> None:
     settings = effective_settings(args)
-    await get_status()
+    deadline = asyncio.get_running_loop().time() + 60
+    while True:
+        try:
+            await get_status()
+            break
+        except (aiohttp.ClientError, RuntimeError, TimeoutError, ConnectionError):
+            if asyncio.get_running_loop().time() >= deadline:
+                raise
+            await asyncio.sleep(1)
 
     if args.parent_pid and os.name == "posix":
         async def stop_with_parent() -> None:

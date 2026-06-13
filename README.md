@@ -4,7 +4,7 @@ Desktop dictation and live transcription for Linux and Windows.
 
 gdictate turns a hotkey into text input: hold a key, speak, release, and the text is inserted into the focused app. It uses Chrome/Chromium/Edge Web Speech as the first speech engine, so there are no paid API keys or cloud project setup.
 
-[Download v0.3.3](https://github.com/bigidulka/gdictate/releases/tag/v0.3.3) · [Project page](https://bigidulka.github.io/gdictate/) · [Release workflow](.github/workflows/release.yml)
+[Download v0.3.4](https://github.com/bigidulka/gdictate/releases/tag/v0.3.4) · [Project page](https://bigidulka.github.io/gdictate/) · [Release workflow](.github/workflows/release.yml)
 
 ## Highlights
 
@@ -20,16 +20,16 @@ gdictate turns a hotkey into text input: hold a key, speak, release, and the tex
 
 ## Download
 
-Current release: [v0.3.3](https://github.com/bigidulka/gdictate/releases/tag/v0.3.3)
+Current release: [v0.3.4](https://github.com/bigidulka/gdictate/releases/tag/v0.3.4)
 
 | Platform | Package |
 |---|---|
-| Linux portable | `gdictate_0.3.3_amd64.AppImage` |
-| Debian / Ubuntu | `gdictate_0.3.3_amd64.deb` |
-| Fedora / RPM | `gdictate-0.3.3-1.x86_64.rpm` |
-| Arch / pacman | `gdictate-0.3.3-1-x86_64.pkg.tar.zst` |
-| Windows installer | `gdictate_0.3.3_x64-setup.exe` |
-| Windows MSI | `gdictate_0.3.3_x64_en-US.msi` |
+| Linux portable | `gdictate_0.3.4_amd64.AppImage` |
+| Debian / Ubuntu | `gdictate_0.3.4_amd64.deb` |
+| Fedora / RPM | `gdictate-0.3.4-1.x86_64.rpm` |
+| Arch / pacman | `gdictate-0.3.4-1-x86_64.pkg.tar.zst` |
+| Windows installer | `gdictate_0.3.4_x64-setup.exe` |
+| Windows MSI | `gdictate_0.3.4_x64_en-US.msi` |
 
 The GitHub Actions release workflow builds all packages on tags matching `v*` and uploads them to the GitHub Release.
 
@@ -280,8 +280,8 @@ npm run tauri:build:all
 3. Tag the release:
 
 ```bash
-git tag -a v0.3.3 -m "gdictate v0.3.3"
-git push origin v0.3.3
+git tag -a v0.3.4 -m "gdictate v0.3.4"
+git push origin v0.3.4
 ```
 
 The release workflow builds:
