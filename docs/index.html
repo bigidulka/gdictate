@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gdictate - Desktop Dictation</title>
+    <meta
+      name="description"
+      content="gdictate is a Linux and Windows desktop dictation app with hold-to-talk channels, live popup transcription, sequential paste, and packaged releases."
+    />
+    <style>
+      :root {
+        color: #19202a;
+        background: #f6f7f9;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .hero {
+        background:
+          linear-gradient(180deg, rgba(15, 20, 26, 0.62), rgba(15, 20, 26, 0.86)),
+          url("https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1800&q=80");
+        background-position: center;
+        background-size: cover;
+        color: #fff;
+        min-height: 92vh;
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .nav,
+      .heroInner,
+      .sectionInner {
+        margin: 0 auto;
+        max-width: 1120px;
+        width: 100%;
+      }
+
+      .nav {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .brand {
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      .navLinks {
+        display: flex;
+        gap: 14px;
+      }
+
+      .navLinks a {
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 14px;
+        text-decoration: none;
+      }
+
+      .heroInner {
+        display: grid;
+        gap: 28px;
+        margin-top: auto;
+        padding: 110px 0 70px;
+      }
+
+      .eyebrow {
+        color: #9ed0ff;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        font-size: clamp(48px, 8vw, 92px);
+        line-height: 0.95;
+        margin: 0;
+        max-width: 900px;
+      }
+
+      .lead {
+        color: rgba(255, 255, 255, 0.84);
+        font-size: 20px;
+        line-height: 1.5;
+        margin: 0;
+        max-width: 760px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .button {
+        align-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 6px;
+        display: inline-flex;
+        font-weight: 750;
+        min-height: 42px;
+        padding: 0 16px;
+        text-decoration: none;
+      }
+
+      .button.primary {
+        background: #fff;
+        color: #111820;
+      }
+
+      .stats {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        max-width: 920px;
+      }
+
+      .stat {
+        border-left: 1px solid rgba(255, 255, 255, 0.24);
+        padding-left: 14px;
+      }
+
+      .stat strong {
+        display: block;
+        font-size: 24px;
+      }
+
+      .stat span {
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 13px;
+      }
+
+      section {
+        padding: 72px 24px;
+      }
+
+      h2 {
+        font-size: 34px;
+        line-height: 1.1;
+        margin: 0 0 24px;
+      }
+
+      .muted {
+        color: #657080;
+      }
+
+      .grid {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .card {
+        background: #fff;
+        border: 1px solid #dde3eb;
+        border-radius: 8px;
+        min-height: 154px;
+        padding: 18px;
+      }
+
+      .card h3 {
+        margin: 0 0 10px;
+      }
+
+      .card p,
+      .card li {
+        color: #566273;
+        line-height: 1.5;
+      }
+
+      .split {
+        display: grid;
+        gap: 28px;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .terminal {
+        background: #111820;
+        border-radius: 8px;
+        color: #dbe7f6;
+        overflow: auto;
+        padding: 18px;
+      }
+
+      code,
+      pre {
+        font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+      }
+
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+      }
+
+      .packages {
+        display: grid;
+        gap: 10px;
+      }
+
+      .package {
+        align-items: center;
+        background: #fff;
+        border: 1px solid #dde3eb;
+        border-radius: 8px;
+        display: flex;
+        justify-content: space-between;
+        padding: 14px 16px;
+      }
+
+      .package span {
+        color: #657080;
+      }
+
+      footer {
+        background: #111820;
+        color: #d8e4f3;
+        padding: 34px 24px;
+      }
+
+      footer .sectionInner {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      footer a {
+        color: #fff;
+      }
+
+      @media (max-width: 820px) {
+        .nav {
+          align-items: flex-start;
+          gap: 16px;
+          flex-direction: column;
+        }
+
+        .stats,
+        .grid,
+        .split {
+          grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: 48px;
+        }
+
+        section {
+          padding: 52px 18px;
+        }
+
+        .hero {
+          padding: 18px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="hero">
+      <nav class="nav" aria-label="Project links">
+        <div class="brand">gdictate</div>
+        <div class="navLinks">
+          <a href="https://github.com/bigidulka/gdictate">GitHub</a>
+          <a href="https://github.com/bigidulka/gdictate/releases/tag/v0.3.0">Download</a>
+          <a href="https://github.com/bigidulka/gdictate/blob/main/README.md">Docs</a>
+        </div>
+      </nav>
+
+      <div class="heroInner">
+        <div class="eyebrow">Linux and Windows desktop dictation</div>
+        <h1>Hold a key. Speak. Text appears where you work.</h1>
+        <p class="lead">
+          gdictate is a compact Tauri desktop app for live dictation, speaker transcription, sequential paste,
+          and local audio/video transcription workflows.
+        </p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/bigidulka/gdictate/releases/tag/v0.3.0">Download v0.3.0</a>
+          <a class="button" href="https://github.com/bigidulka/gdictate">View source</a>
+        </div>
+        <div class="stats">
+          <div class="stat"><strong>2</strong><span>hold-to-talk channels</span></div>
+          <div class="stat"><strong>6</strong><span>release package formats</span></div>
+          <div class="stat"><strong>0</strong><span>speech API keys required</span></div>
+          <div class="stat"><strong>1</strong><span>shared settings core</span></div>
+        </div>
+      </div>
+    </header>
+
+    <section>
+      <div class="sectionInner">
+        <h2>Built for fast transcription workflows</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Live dictation</h3>
+            <p>Use microphone mode for your own speech and speaker mode for calls, meetings, videos, or system output.</p>
+          </article>
+          <article class="card">
+            <h3>Tiny live popup</h3>
+            <p>Always-on-top, transparent, click-through capable, and designed to stay out of the way.</p>
+          </article>
+          <article class="card">
+            <h3>Sequential paste</h3>
+            <p>Final recognition chunks can be inserted while dictating, with fallback paste on release.</p>
+          </article>
+          <article class="card">
+            <h3>Daemon and tray</h3>
+            <p>The Tauri shell supervises the Python daemon, exposes tray actions, and keeps the app running in the background.</p>
+          </article>
+          <article class="card">
+            <h3>OS diagnostics</h3>
+            <p>Preflight reports explain Chrome, audio, paste, hotkey, popup, and platform-specific setup state.</p>
+          </article>
+          <article class="card">
+            <h3>File transcription</h3>
+            <p>Optional local faster-whisper and diarization pipeline exports TXT, SRT, VTT, and JSON.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="sectionInner split">
+        <div>
+          <h2>Install from release packages</h2>
+          <p class="muted">Pick the package that matches your system. Linux release builds include AppImage, deb, rpm, and Arch pacman package. Windows builds include NSIS and MSI.</p>
+          <div class="packages">
+            <div class="package"><strong>Linux portable</strong><span>gdictate_0.3.0_amd64.AppImage</span></div>
+            <div class="package"><strong>Debian / Ubuntu</strong><span>gdictate_0.3.0_amd64.deb</span></div>
+            <div class="package"><strong>Fedora / RPM</strong><span>gdictate-0.3.0-1.x86_64.rpm</span></div>
+            <div class="package"><strong>Arch</strong><span>gdictate-0.3.0-1-x86_64.pkg.tar.zst</span></div>
+            <div class="package"><strong>Windows setup</strong><span>gdictate_0.3.0_x64-setup.exe</span></div>
+            <div class="package"><strong>Windows MSI</strong><span>gdictate_0.3.0_x64_en-US.msi</span></div>
+          </div>
+        </div>
+        <div class="terminal">
+          <pre><code>git clone https://github.com/bigidulka/gdictate.git
+cd gdictate
+./install.sh
+.venv/bin/python gdictate.py --daemon --no-ui
+
+npm run tauri:dev</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="sectionInner">
+        <h2>Platform notes</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Linux</h3>
+            <p>Primary target. PipeWire/Pulse speaker routing, wl-copy paste, ydotool/wtype key injection, evdev hold hotkeys.</p>
+          </article>
+          <article class="card">
+            <h3>Windows</h3>
+            <p>GUI package and microphone path are supported. Speaker transcription needs a loopback recording input such as Stereo Mix or VB-CABLE.</p>
+          </article>
+          <article class="card">
+            <h3>Chrome bridge</h3>
+            <p>Chrome/Chromium/Edge runs as a small hidden Web Speech bridge. No Google Cloud account or paid key is needed.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="sectionInner">
+        <span>MIT licensed</span>
+        <a href="https://github.com/bigidulka/gdictate/releases/tag/v0.3.0">Download gdictate v0.3.0</a>
+      </div>
+    </footer>
+  </body>
+</html>
