@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 WS_PORT = int(os.environ.get("GDICTATE_WS_PORT", "9876"))
 CONTROL_PORT = int(os.environ.get("GDICTATE_CONTROL_PORT", "9877"))
 

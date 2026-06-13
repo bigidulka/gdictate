@@ -59,9 +59,11 @@ class InstallAssetsTests(unittest.TestCase):
                 )
                 self.assertIn("--daemon --no-ui", startup.read_text(encoding="utf-8"))
             else:
-                self.assertEqual(len(plan.assets), 3)
+                self.assertEqual(len(plan.assets), 4)
                 service = home / ".config" / "systemd" / "user" / "gdictate-daemon.service"
                 self.assertIn("--daemon --no-ui", service.read_text(encoding="utf-8"))
+                hotkeys_service = home / ".config" / "systemd" / "user" / "gdictate-hotkeys.service"
+                self.assertIn("--daemon-hotkeys", hotkeys_service.read_text(encoding="utf-8"))
 
 
 class ExportTranscriptionTests(unittest.TestCase):

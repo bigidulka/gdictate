@@ -67,6 +67,7 @@ def _linux_plan(home: Path) -> UserInstallPlan:
     python = _python_command()
     gui_exec = _gui_command()
     service_path = home / ".config" / "systemd" / "user" / "gdictate-daemon.service"
+    hotkeys_service_path = home / ".config" / "systemd" / "user" / "gdictate-hotkeys.service"
     desktop_path = home / ".local" / "share" / "applications" / "gdictate.desktop"
     autostart_path = home / ".config" / "autostart" / "gdictate.desktop"
     icon_path = PROJECT_DIR / "src-tauri" / "icons" / "icon.png"
@@ -94,6 +95,27 @@ def _linux_plan(home: Path) -> UserInstallPlan:
             ),
         ),
         UserInstallAsset(
+            id="systemd_hotkeys_service",
+            label="gdictate hotkeys user service",
+            path=str(hotkeys_service_path),
+            kind="systemd-user-service",
+            exists=hotkeys_service_path.exists(),
+            executable=False,
+            content=(
+                "[Unit]\n"
+                "Description=gdictate evdev hold hotkeys\n"
+                "After=graphical-session.target gdictate-daemon.service\n"
+                "Wants=gdictate-daemon.service\n\n"
+                "[Service]\n"
+                f"WorkingDirectory={PROJECT_DIR}\n"
+                f"ExecStart={python} {PROJECT_DIR / 'gdictate.py'} --daemon-hotkeys\n"
+                "Restart=on-failure\n"
+                "RestartSec=2\n\n"
+                "[Install]\n"
+                "WantedBy=default.target\n"
+            ),
+        ),
+        UserInstallAsset(
             id="desktop_entry",
             label="gdictate desktop launcher",
             path=str(desktop_path),
@@ -114,7 +136,7 @@ def _linux_plan(home: Path) -> UserInstallPlan:
     ]
     actions = [
         "systemctl --user daemon-reload",
-        "systemctl --user enable --now gdictate-daemon.service",
+        "systemctl --user enable --now gdictate-daemon.service gdictate-hotkeys.service",
         "update-desktop-database ~/.local/share/applications  # optional",
     ]
     warnings: list[str] = []

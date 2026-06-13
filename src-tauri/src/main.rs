@@ -936,9 +936,13 @@ pub fn run() {
         .setup(|app| {
             configure_python_resources(app.handle());
             setup_tray(app)?;
-            let settings = load_settings_file().unwrap_or_default();
-            sync_hotkey_backend(app.handle(), &settings);
             spawn_daemon_supervisor(app.handle());
+            let handle = app.handle().clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(500));
+                let settings = load_settings_file().unwrap_or_default();
+                let _ = sync_hotkey_backend(&handle, &settings);
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
