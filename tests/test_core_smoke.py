@@ -181,6 +181,15 @@ class SettingsTests(unittest.TestCase):
             options = re.findall(r'"([^"]+)"', match.group("options"))
             self.assertEqual(options, field.options, field.path)
 
+    def test_tauri_settings_apply_runtime_effects(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "src" / "App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("function patchOverlay", source)
+        self.assertRegex(source, r'Live popup" checked=\{settings\.overlay\.enabled\} onChange=\{\(enabled\) => patchOverlay')
+        self.assertIn('await call<string>("close_overlay"', source)
+        self.assertIn('await call<string>("daemon_shutdown"', source)
+        self.assertIn('await call<string>("daemon_spawn"', source)
+
     def test_linux_package_metadata_includes_core_runtime_deps(self) -> None:
         root = Path(__file__).resolve().parents[1]
         tauri_conf = json.loads((root / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))

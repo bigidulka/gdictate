@@ -529,6 +529,7 @@ export function App() {
   const [status, setStatus] = useState("");
   const [isOverlayWindow, setIsOverlayWindow] = useState(new URLSearchParams(window.location.search).get("view") === "overlay");
   const settingsRef = useRef(settings);
+  const savedSettingsRef = useRef(settings);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -602,6 +603,7 @@ export function App() {
     const files = await loadFilePipeline("");
     const jobs = await loadFileJobs();
     setSettings(loaded);
+    savedSettingsRef.current = loaded;
     setCapabilities(caps);
     setLiveReport(live);
     setOverlayStatus(overlay);
@@ -719,20 +721,79 @@ export function App() {
     setDiagnostics(await loadDiagnostics());
   }
 
-  async function save() {
-    localStorage.setItem("gdictate.settings", JSON.stringify(settings));
-    const hotkeys = await call<NativeHotkeyReport | null>("save_settings", { settings }, null);
+  async function persistSettings(next: AppSettings) {
+    localStorage.setItem("gdictate.settings", JSON.stringify(next));
+    const hotkeys = await call<NativeHotkeyReport | null>("save_settings", { settings: next }, null);
     if (hotkeys) {
       setNativeHotkeys(hotkeys);
     }
-    setStatus("settings saved");
+    savedSettingsRef.current = next;
+  }
+
+  async function applyOverlaySettings(next: AppSettings) {
+    const current = await loadOverlayStatus();
+    if (!next.overlay.enabled) {
+      await call<string>("close_overlay", undefined, "");
+    } else if (current.visible) {
+      await call<string>(
+        "open_overlay",
+        { clickThrough: next.overlay.click_through, position: next.overlay.position },
+        ""
+      );
+    }
+    setOverlayStatus(await loadOverlayStatus());
+  }
+
+  function daemonSettingsChanged(previous: AppSettings, next: AppSettings) {
+    return JSON.stringify({
+      language: previous.language,
+      engine: previous.engine,
+      audio: previous.audio,
+      paste: previous.paste,
+      chrome: previous.chrome
+    }) !== JSON.stringify({
+      language: next.language,
+      engine: next.engine,
+      audio: next.audio,
+      paste: next.paste,
+      chrome: next.chrome
+    });
+  }
+
+  async function applySettingsRuntime(previous: AppSettings, next: AppSettings) {
+    await applyOverlaySettings(next);
+    if (!daemonSettingsChanged(previous, next)) {
+      return;
+    }
+    if (daemon.state === "recording" || daemon.state === "finalizing") {
+      setStatus("settings saved; daemon reload after stop");
+      return;
+    }
+    await call<string>("daemon_shutdown", undefined, "");
+    await call<string>("daemon_spawn", undefined, "");
+    window.setTimeout(() => void refreshDaemon(false), 800);
+    setStatus("settings saved; daemon restarted");
+  }
+
+  async function save() {
+    const previous = savedSettingsRef.current;
+    const next = withSettingsDefaults(settings);
+    const reloadsDaemon = daemonSettingsChanged(previous, next);
+    await persistSettings(next);
+    await applySettingsRuntime(previous, next);
+    if (!reloadsDaemon) {
+      setStatus("settings saved");
+    }
   }
 
   async function resetSettings() {
+    const previous = savedSettingsRef.current;
     const next = withSettingsDefaults(await call<AppSettings>("reset_settings", undefined, defaults));
     localStorage.setItem("gdictate.settings", JSON.stringify(next));
     setSettings(next);
+    savedSettingsRef.current = next;
     setNativeHotkeys(await loadNativeHotkeys());
+    await applySettingsRuntime(previous, next);
     setStatus("settings reset");
   }
 
@@ -1178,11 +1239,11 @@ export function App() {
             <section className="settingsSection">
               <h2>Live</h2>
               <div className="settingsGrid">
-                <Toggle label="Live popup" checked={settings.overlay.enabled} onChange={(enabled) => patch({ overlay: { ...settings.overlay, enabled } })} />
-                <Toggle label="Click-through" checked={settings.overlay.click_through} onChange={(click_through) => patch({ overlay: { ...settings.overlay, click_through } })} />
-                <Toggle label="Interim text" checked={settings.overlay.show_interim} onChange={(show_interim) => patch({ overlay: { ...settings.overlay, show_interim } })} />
+                <Toggle label="Live popup" checked={settings.overlay.enabled} onChange={(enabled) => patchOverlay({ ...settings.overlay, enabled })} />
+                <Toggle label="Click-through" checked={settings.overlay.click_through} onChange={(click_through) => patchOverlay({ ...settings.overlay, click_through })} />
+                <Toggle label="Interim text" checked={settings.overlay.show_interim} onChange={(show_interim) => patchOverlay({ ...settings.overlay, show_interim })} />
                 <Field label="Position">
-                  <Select value={settings.overlay.position} options={["lower-center", "top-center", "bottom-right"]} onChange={(position) => patch({ overlay: { ...settings.overlay, position } })} />
+                  <Select value={settings.overlay.position} options={["lower-center", "top-center", "bottom-right"]} onChange={(position) => patchOverlay({ ...settings.overlay, position })} />
                 </Field>
               </div>
               <div className="commandRow">
@@ -1281,6 +1342,15 @@ export function App() {
 
   function patch(next: Partial<AppSettings>) {
     setSettings((current) => ({ ...current, ...next }));
+  }
+
+  function patchOverlay(overlay: AppSettings["overlay"]) {
+    const next = withSettingsDefaults({ ...settingsRef.current, overlay });
+    setSettings(next);
+    void persistSettings(next)
+      .then(() => applyOverlaySettings(next))
+      .then(() => setStatus(next.overlay.enabled ? "live popup settings applied" : "live popup disabled"))
+      .catch((error) => setStatus(String(error)));
   }
 }
 
