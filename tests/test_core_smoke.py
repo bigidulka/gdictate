@@ -289,6 +289,36 @@ class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
             paste_module._copy_linux = original_copy
             paste_module._ydotool_type = original_type
 
+    async def test_type_mode_uses_clipboard_paste_for_unicode(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        async def fake_copy(text: str) -> bool:
+            calls.append(("copy", text))
+            return True
+
+        async def fake_type(text: str) -> bool:
+            calls.append(("type", text))
+            return True
+
+        async def fake_paste(combo: str) -> bool:
+            calls.append(("paste", combo))
+            return True
+
+        original_copy = paste_module._copy_linux
+        original_type = paste_module._ydotool_type
+        original_paste = paste_module._ydotool_paste
+        paste_module._copy_linux = fake_copy
+        paste_module._ydotool_type = fake_type
+        paste_module._ydotool_paste = fake_paste
+        try:
+            ok = await paste_module._paste_linux("привет", "type", "ctrl-v")
+            self.assertTrue(ok)
+            self.assertEqual(calls, [("copy", "привет"), ("paste", "ctrl-v")])
+        finally:
+            paste_module._copy_linux = original_copy
+            paste_module._ydotool_type = original_type
+            paste_module._ydotool_paste = original_paste
+
 
 class LivePasteTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_paste_queues_final_chunks_without_stop_duplicate(self) -> None:

@@ -22,6 +22,9 @@ async def _paste_linux(text: str, mode: str, combo: str) -> bool:
         copied = await _copy_linux(text)
         if mode == "copy":
             return copied
+        if not text.isascii():
+            await asyncio.sleep(0.05)
+            return await _ydotool_paste(combo)
         typed = await _ydotool_type(text)
         return typed
 
