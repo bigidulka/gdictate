@@ -11,6 +11,7 @@ from pathlib import Path
 
 from gdictate_core.audio import audio_router_label, configure_audio_source
 from gdictate_core import app as app_module
+from gdictate_core import paste as paste_module
 from gdictate_core.app import Dictation
 from gdictate_core.chrome import chrome_profile_dir, is_browser_configured
 from gdictate_core.file_jobs import FileTranscriptionResult, FileTranscriptionSegment, export_transcription
@@ -222,6 +223,71 @@ class PasteTests(unittest.TestCase):
             _linux_combo_keycodes("ctrl-shift-v"),
             ["29:1", "42:1", "47:1", "47:0", "42:0", "29:0"],
         )
+
+
+class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
+    async def test_type_mode_copies_then_types(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        async def fake_copy(text: str) -> bool:
+            calls.append(("copy", text))
+            return True
+
+        async def fake_type(text: str) -> bool:
+            calls.append(("type", text))
+            return True
+
+        original_copy = paste_module._copy_linux
+        original_type = paste_module._ydotool_type
+        paste_module._copy_linux = fake_copy
+        paste_module._ydotool_type = fake_type
+        try:
+            ok = await paste_module._paste_linux("hello", "type", "ctrl-v")
+            self.assertTrue(ok)
+            self.assertEqual(calls, [("copy", "hello"), ("type", "hello")])
+        finally:
+            paste_module._copy_linux = original_copy
+            paste_module._ydotool_type = original_type
+
+    async def test_copy_mode_only_updates_clipboard(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        async def fake_copy(text: str) -> bool:
+            calls.append(("copy", text))
+            return True
+
+        async def fake_type(text: str) -> bool:
+            calls.append(("type", text))
+            return True
+
+        original_copy = paste_module._copy_linux
+        original_type = paste_module._ydotool_type
+        paste_module._copy_linux = fake_copy
+        paste_module._ydotool_type = fake_type
+        try:
+            ok = await paste_module._paste_linux("hello", "copy", "ctrl-v")
+            self.assertTrue(ok)
+            self.assertEqual(calls, [("copy", "hello")])
+        finally:
+            paste_module._copy_linux = original_copy
+            paste_module._ydotool_type = original_type
+
+    async def test_type_mode_success_tracks_direct_type(self) -> None:
+        async def fake_copy(_text: str) -> bool:
+            return False
+
+        async def fake_type(_text: str) -> bool:
+            return True
+
+        original_copy = paste_module._copy_linux
+        original_type = paste_module._ydotool_type
+        paste_module._copy_linux = fake_copy
+        paste_module._ydotool_type = fake_type
+        try:
+            self.assertTrue(await paste_module._paste_linux("hello", "type", "ctrl-v"))
+        finally:
+            paste_module._copy_linux = original_copy
+            paste_module._ydotool_type = original_type
 
 
 class LivePasteTests(unittest.IsolatedAsyncioTestCase):

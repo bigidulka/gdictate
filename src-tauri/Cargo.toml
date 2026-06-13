@@ -1,6 +1,6 @@
 [package]
 name = "gdictate-app"
-version = "0.3.5"
+version = "0.3.6"
 description = "gdictate desktop app"
 authors = ["bigidulka"]
 edition = "2021"

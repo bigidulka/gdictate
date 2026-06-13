@@ -11,27 +11,24 @@ async def paste_text(text: str, mode: str = "auto", linux_combo: str = "ctrl-shi
     if mode == "none":
         return False
     if os.name == "nt":
+        if mode == "copy":
+            return await _copy_windows(text)
         return await _paste_windows(text, windows_combo)
     return await _paste_linux(text, mode, linux_combo)
 
 
 async def _paste_linux(text: str, mode: str, combo: str) -> bool:
-    if mode == "type":
-        return await _ydotool_type(text)
+    if mode in ("type", "copy"):
+        copied = await _copy_linux(text)
+        if mode == "copy":
+            return copied
+        typed = await _ydotool_type(text)
+        return typed
 
-    if not shutil.which("wl-copy"):
-        print("[WARN] wl-copy not found; skip paste", file=sys.stderr, flush=True)
+    copied = await _copy_linux(text)
+    if not copied:
         return False
 
-    proc = await asyncio.create_subprocess_exec(
-        "wl-copy",
-        text,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    if await proc.wait() != 0:
-        print("[WARN] wl-copy failed; skip paste", file=sys.stderr, flush=True)
-        return False
     await asyncio.sleep(0.05)
 
     if mode in ("auto", "ydotool") and shutil.which("ydotool"):
@@ -46,6 +43,24 @@ async def _paste_linux(text: str, mode: str, combo: str) -> bool:
 
     print("[WARN] ydotool/wtype not found; text copied but not pasted", file=sys.stderr, flush=True)
     return False
+
+
+async def _copy_linux(text: str) -> bool:
+    if not shutil.which("wl-copy"):
+        print("[WARN] wl-copy not found; skip paste", file=sys.stderr, flush=True)
+        return False
+
+    proc = await asyncio.create_subprocess_exec(
+        "wl-copy",
+        "--",
+        text,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    if await proc.wait() != 0:
+        print("[WARN] wl-copy failed; skip paste", file=sys.stderr, flush=True)
+        return False
+    return True
 
 
 async def _ydotool_type(text: str) -> bool:
@@ -124,6 +139,14 @@ async def _wtype_paste(combo: str) -> bool:
 
 
 async def _paste_windows(text: str, combo: str) -> bool:
+    if not await _copy_windows(text):
+        return False
+    await asyncio.sleep(0.05)
+    _send_windows_combo(combo)
+    return True
+
+
+async def _copy_windows(text: str) -> bool:
     escaped = text.replace("'", "''")
     proc = await asyncio.create_subprocess_exec(
         "powershell",
@@ -135,8 +158,6 @@ async def _paste_windows(text: str, combo: str) -> bool:
     )
     if await proc.wait() != 0:
         return False
-    await asyncio.sleep(0.05)
-    _send_windows_combo(combo)
     return True
 
 

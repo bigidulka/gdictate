@@ -149,7 +149,7 @@ def settings_schema() -> list[SettingsGroup]:
             "paste",
             "Paste",
             [
-                _field(defaults, "paste.mode", "Paste mode", "select", ["auto", "ydotool", "wtype", "type", "none"]),
+                _field(defaults, "paste.mode", "Paste mode", "select", ["auto", "ydotool", "wtype", "type", "copy", "none"]),
                 _field(defaults, "paste.live", "Paste while dictating", "bool"),
                 _field(defaults, "paste.linux_terminal_combo", "Linux terminal combo", "select", ["ctrl-shift-v", "ctrl-v"]),
                 _field(defaults, "paste.windows_combo", "Windows paste combo", "select", ["ctrl-v"]),
