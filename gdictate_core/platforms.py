@@ -546,6 +546,8 @@ def diagnostics_report() -> DiagnosticsReport:
     hotkey_backend = "evdev hold + DE shortcut toggle"
     paste_backend = "wl-copy + "
     paste_backend += "ydotool" if has_ydotool else "wtype" if has_wtype else "missing key injector"
+    if has_ydotool:
+        paste_backend += " (+ direct type)"
     speaker_ready = has_pactl and bool(speakers)
 
     if not has_pactl:

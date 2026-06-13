@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--engine", default=None, choices=["chrome"])
     parser.add_argument("--key", default=None)
     parser.add_argument("--bind-mode", default=None, choices=["dual-hold", "toggle", "enter"])
-    parser.add_argument("--paste", default=None, choices=["auto", "ydotool", "wtype", "none"])
+    parser.add_argument("--paste", default=None, choices=["auto", "ydotool", "wtype", "type", "none"])
     parser.add_argument("--live-paste", default=None, action=argparse.BooleanOptionalAction, help="Paste final chunks while dictating")
     parser.add_argument("--linux-paste-key", default=None, choices=["ctrl-v", "ctrl-shift-v"], help="Linux paste shortcut sent by ydotool/wtype")
     parser.add_argument("--no-paste", action="store_const", const="none", dest="paste")

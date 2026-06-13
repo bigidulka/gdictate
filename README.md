@@ -4,7 +4,7 @@ Desktop dictation and live transcription for Linux and Windows.
 
 gdictate turns a hotkey into text input: hold a key, speak, release, and the text is inserted into the focused app. It uses Chrome/Chromium/Edge Web Speech as the first speech engine, so there are no paid API keys or cloud project setup.
 
-[Download v0.3.4](https://github.com/bigidulka/gdictate/releases/tag/v0.3.4) · [Project page](https://bigidulka.github.io/gdictate/) · [Release workflow](.github/workflows/release.yml)
+[Download v0.3.5](https://github.com/bigidulka/gdictate/releases/tag/v0.3.5) · [Project page](https://bigidulka.github.io/gdictate/) · [Release workflow](.github/workflows/release.yml)
 
 ## Highlights
 
@@ -20,16 +20,16 @@ gdictate turns a hotkey into text input: hold a key, speak, release, and the tex
 
 ## Download
 
-Current release: [v0.3.4](https://github.com/bigidulka/gdictate/releases/tag/v0.3.4)
+Current release: [v0.3.5](https://github.com/bigidulka/gdictate/releases/tag/v0.3.5)
 
 | Platform | Package |
 |---|---|
-| Linux portable | `gdictate_0.3.4_amd64.AppImage` |
-| Debian / Ubuntu | `gdictate_0.3.4_amd64.deb` |
-| Fedora / RPM | `gdictate-0.3.4-1.x86_64.rpm` |
-| Arch / pacman | `gdictate-0.3.4-1-x86_64.pkg.tar.zst` |
-| Windows installer | `gdictate_0.3.4_x64-setup.exe` |
-| Windows MSI | `gdictate_0.3.4_x64_en-US.msi` |
+| Linux portable | `gdictate_0.3.5_amd64.AppImage` |
+| Debian / Ubuntu | `gdictate_0.3.5_amd64.deb` |
+| Fedora / RPM | `gdictate-0.3.5-1.x86_64.rpm` |
+| Arch / pacman | `gdictate-0.3.5-1-x86_64.pkg.tar.zst` |
+| Windows installer | `gdictate_0.3.5_x64-setup.exe` |
+| Windows MSI | `gdictate_0.3.5_x64_en-US.msi` |
 
 The GitHub Actions release workflow builds all packages on tags matching `v*` and uploads them to the GitHub Release.
 
@@ -162,7 +162,7 @@ Main settings groups:
 - **Chrome:** browser channel, hidden automation window, setup flow, profile directory.
 - **Audio:** Linux router, Windows speaker input, input restore behavior.
 - **Binds:** hold/toggle mode, mic/speakers hotkeys, Linux backend.
-- **Paste:** paste backend, live paste, terminal paste combo.
+- **Paste:** paste backend, direct type mode, live paste, terminal paste combo.
 - **Live:** popup enabled, click-through, interim text, position.
 
 Changing live popup settings applies immediately. Changing daemon-bound settings is saved and the daemon is restarted when idle.
@@ -180,6 +180,7 @@ Changing live popup settings applies immediately. Changing daemon-bound settings
 .venv/bin/python gdictate.py --live-paste
 .venv/bin/python gdictate.py --no-live-paste
 .venv/bin/python gdictate.py --paste auto
+.venv/bin/python gdictate.py --paste type --save-settings
 .venv/bin/python gdictate.py --linux-paste-key ctrl-v
 .venv/bin/python gdictate.py --chrome-channel chromium
 .venv/bin/python gdictate.py --chrome-profile-dir ./tmp/chrome-profile
@@ -219,7 +220,7 @@ File transcription:
 | `gdictate_core/app.py` | Dictation state machine and transcript routing. |
 | `gdictate_core/chrome.py` | Chrome/WebSpeech bridge, HTTPS server, WebSocket messages. |
 | `gdictate_core/audio.py` | Linux PipeWire/Pulse routing and Windows speaker-input guidance. |
-| `gdictate_core/paste.py` | Linux wl-copy + ydotool/wtype, Windows clipboard + Ctrl+V. |
+| `gdictate_core/paste.py` | Linux wl-copy + ydotool/wtype, direct ydotool type mode, Windows clipboard + Ctrl+V. |
 | `gdictate_core/hotkeys.py` | Linux evdev hold/toggle listeners. |
 | `gdictate_core/ipc.py` | Local daemon HTTP/WebSocket control server. |
 | `gdictate_core/settings.py` | Shared dataclass settings and schema. |
@@ -280,8 +281,8 @@ npm run tauri:build:all
 3. Tag the release:
 
 ```bash
-git tag -a v0.3.4 -m "gdictate v0.3.4"
-git push origin v0.3.4
+git tag -a v0.3.5 -m "gdictate v0.3.5"
+git push origin v0.3.5
 ```
 
 The release workflow builds:

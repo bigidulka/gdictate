@@ -1220,7 +1220,7 @@ export function App() {
                   </Field>
                 )}
                 <Field label="Paste backend">
-                  <Select value={settings.paste.mode} options={["auto", "ydotool", "wtype", "none"]} onChange={(mode) => patch({ paste: { ...settings.paste, mode } })} />
+                  <Select value={settings.paste.mode} options={["auto", "ydotool", "wtype", "type", "none"]} onChange={(mode) => patch({ paste: { ...settings.paste, mode } })} />
                 </Field>
                 <Toggle label="Live paste" checked={settings.paste.live} onChange={(live) => patch({ paste: { ...settings.paste, live } })} />
                 {isLinux && (

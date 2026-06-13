@@ -16,6 +16,9 @@ async def paste_text(text: str, mode: str = "auto", linux_combo: str = "ctrl-shi
 
 
 async def _paste_linux(text: str, mode: str, combo: str) -> bool:
+    if mode == "type":
+        return await _ydotool_type(text)
+
     if not shutil.which("wl-copy"):
         print("[WARN] wl-copy not found; skip paste", file=sys.stderr, flush=True)
         return False
@@ -42,6 +45,32 @@ async def _paste_linux(text: str, mode: str, combo: str) -> bool:
             return True
 
     print("[WARN] ydotool/wtype not found; text copied but not pasted", file=sys.stderr, flush=True)
+    return False
+
+
+async def _ydotool_type(text: str) -> bool:
+    if not shutil.which("ydotool"):
+        print("[WARN] ydotool not found; skip direct type", file=sys.stderr, flush=True)
+        return False
+    env = os.environ.copy()
+    socket = f"/run/user/{os.getuid()}/.ydotool_socket"
+    if os.path.exists(socket):
+        env.setdefault("YDOTOOL_SOCKET", socket)
+    proc = await asyncio.create_subprocess_exec(
+        "ydotool",
+        "type",
+        "--file",
+        "-",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    _, stderr = await proc.communicate(text.encode("utf-8"))
+    if proc.returncode == 0:
+        return True
+    detail = stderr.decode("utf-8", errors="replace").strip()
+    print(f"[WARN] ydotool type failed ({proc.returncode}): {detail}", file=sys.stderr, flush=True)
     return False
 
 

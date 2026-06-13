@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "gdictate-app"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "dirs 5.0.1",
  "serde",
