@@ -1,0 +1,17 @@
+[package]
+name = "gdictate-app"
+version = "0.3.0"
+description = "gdictate desktop app"
+authors = ["bigidulka"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dirs = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2.3.2"
+tauri-plugin-shell = "2"

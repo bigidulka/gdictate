@@ -1,5 +1,2 @@
 aiohttp
-PyQt6
-dbus-python
-qasync
-evdev
+evdev; sys_platform == "linux"
