@@ -33,7 +33,7 @@ def is_browser_configured(profile_dir: str = "") -> bool:
 
 
 def ensure_ssl() -> ssl.SSLContext:
-    CERT_DIR.mkdir(exist_ok=True)
+    CERT_DIR.mkdir(parents=True, exist_ok=True)
     cert = CERT_DIR / "cert.pem"
     key = CERT_DIR / "key.pem"
     if not cert.exists() or not key.exists():
