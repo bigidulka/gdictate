@@ -1,6 +1,6 @@
 # gdictate
 
-Version 0.3.0-dev
+Version 0.3.0
 
 Free streaming voice dictation mini app using Google Speech via Chrome's Web Speech API.
 
