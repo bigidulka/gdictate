@@ -761,7 +761,7 @@ fn ensure_daemon_ready() -> Result<(), String> {
     }
 
     spawn_daemon_process()?;
-    let deadline = Instant::now() + Duration::from_millis(2500);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         if run_python(&["--status"]).is_ok() {
             return Ok(());
