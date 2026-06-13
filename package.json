@@ -1,0 +1,38 @@
+{
+  "name": "gdictate-app",
+  "version": "0.3.0-dev",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "prepare:resources": "node scripts/prepare-resources.mjs",
+    "build": "npm run prepare:resources && tsc && vite build",
+    "check": "tsc && vite build",
+    "test:python": ".venv/bin/python -m unittest discover -s tests",
+    "perf": ".venv/bin/python -m unittest tests.test_performance_smoke",
+    "test": "npm run test:python && npm run build",
+    "bootstrap:linux": "bash scripts/bootstrap-linux.sh",
+    "bootstrap:windows": "powershell -ExecutionPolicy Bypass -File scripts/bootstrap-windows.ps1",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "npm run tauri:build:linux",
+    "tauri:build:linux": "tauri build --bundles deb,rpm && npm run tauri:build:arch && tauri build --bundles appimage",
+    "tauri:build:arch": "bash scripts/package-arch.sh",
+    "tauri:build:windows": "tauri build --bundles nsis,msi",
+    "tauri:build:all": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^6.0.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
+  }
+}

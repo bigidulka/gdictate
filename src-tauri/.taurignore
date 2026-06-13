@@ -1,0 +1,4 @@
+target/
+resources/python/
+**/__pycache__/
+**/*.pyc

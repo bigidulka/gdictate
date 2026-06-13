@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 .certs/
+.tools/
+node_modules/
+dist/
+tmp/
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/resources/python/
