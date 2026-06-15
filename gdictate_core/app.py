@@ -4,7 +4,7 @@ import asyncio
 import sys
 from typing import Callable, Optional
 
-from .audio import AudioRouting, configure_audio_source
+from .audio import AudioRouting, configure_audio_source, get_default_source
 from .engines import SpeechEngine, create_engine
 from .models import AppEvent, State, TranscriptResult
 from .paste import paste_text
@@ -91,13 +91,15 @@ class Dictation:
             self.emit("transcript.final", text=result.text, confidence=result.confidence, channel=result.channel)
             if self.paste_live and self.paste_live_during_recording:
                 self._queue_live_delta(final_text)
+            if self.overlay and self.state == State.RECORDING:
+                self.overlay.show_interim(final_text)
         elif result.text:
             self._full_text = result.text
             print(f"\r\033[K\033[0;33m~\033[0m {result.text}", end="", flush=True)
             self.emit("transcript.interim", text=result.text, channel=result.channel)
             if self.paste_live and self.paste_live_during_recording:
                 self._queue_live_delta(result.text)
-            if self.overlay:
+            if self.overlay and self.state == State.RECORDING:
                 self.overlay.show_interim(result.text)
 
     async def init(self, setup_mode: bool = False) -> None:
@@ -132,6 +134,9 @@ class Dictation:
         if self.tray:
             self.tray.set_state("recording")
         label = {"mic": "я", "speakers": "собеседник", "both": "микрофон+динамики"}.get(source, source)
+        if self.overlay:
+            level_source = self._audio_route.active_source or get_default_source()
+            self.overlay.show_recording_start(label, level_source)
         print(f"\033[1;31m● REC\033[0m  {label}...", flush=True)
         self.emit("recording.started", channel=source)
         if not self.engine:
@@ -150,6 +155,8 @@ class Dictation:
         self.state = State.FINALIZING
         if self.tray:
             self.tray.set_state("finalizing")
+        if self.overlay:
+            self.overlay.hide_popup()
         print(flush=True)
         if self.engine:
             await self.engine.stop_recognition()
@@ -159,7 +166,7 @@ class Dictation:
         if self.paste_live and self.paste_live_during_recording and text:
             self._queue_live_delta(text)
         await self._flush_live_paste()
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.35)
         if text and (
             not self.paste_live
             or not self.paste_live_during_recording
@@ -169,10 +176,10 @@ class Dictation:
             await paste_text(text, self.paste_mode, self.paste_linux_combo, self.paste_windows_combo)
         if text:
             print(f"\033[1;32m= {text}\033[0m", flush=True)
-            if self.overlay:
-                self.overlay.show_final(text)
         else:
             print("\033[0;33m! Нет текста\033[0m", flush=True)
+        if self.overlay:
+            self.overlay.hide_popup()
 
         self.state = State.IDLE
         if self.tray:
@@ -251,3 +258,7 @@ class Dictation:
         self._audio_route.close()
         if self.engine:
             await self.engine.close()
+        if self.overlay:
+            close = getattr(self.overlay, "close", None)
+            if close:
+                close()

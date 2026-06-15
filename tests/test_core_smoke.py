@@ -226,12 +226,12 @@ class PasteTests(unittest.TestCase):
 
 
 class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
-    async def test_type_mode_copies_then_types(self) -> None:
+    async def test_type_mode_types_ascii_directly(self) -> None:
         calls: list[tuple[str, str]] = []
 
         async def fake_copy(text: str) -> bool:
             calls.append(("copy", text))
-            return True
+            return False
 
         async def fake_type(text: str) -> bool:
             calls.append(("type", text))
@@ -244,7 +244,7 @@ class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
         try:
             ok = await paste_module._paste_linux("hello", "type", "ctrl-v")
             self.assertTrue(ok)
-            self.assertEqual(calls, [("copy", "hello"), ("type", "hello")])
+            self.assertEqual(calls, [("type", "hello")])
         finally:
             paste_module._copy_linux = original_copy
             paste_module._ydotool_type = original_type
@@ -307,9 +307,11 @@ class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
         original_copy = paste_module._copy_linux
         original_type = paste_module._ydotool_type
         original_paste = paste_module._ydotool_paste
+        original_which = paste_module.shutil.which
         paste_module._copy_linux = fake_copy
         paste_module._ydotool_type = fake_type
         paste_module._ydotool_paste = fake_paste
+        paste_module.shutil.which = lambda name: "/usr/bin/ydotool" if name == "ydotool" else None
         try:
             ok = await paste_module._paste_linux("привет", "type", "ctrl-v")
             self.assertTrue(ok)
@@ -318,6 +320,7 @@ class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
             paste_module._copy_linux = original_copy
             paste_module._ydotool_type = original_type
             paste_module._ydotool_paste = original_paste
+            paste_module.shutil.which = original_which
 
 
 class LivePasteTests(unittest.IsolatedAsyncioTestCase):

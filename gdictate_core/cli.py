@@ -148,6 +148,21 @@ def make_dictation(settings: AppSettings, args: argparse.Namespace) -> Dictation
     )
 
 
+def make_overlay(settings: AppSettings):
+    if not settings.overlay.enabled:
+        return None
+    try:
+        from overlay import OverlayPopup
+    except Exception as exc:
+        print(f"[WARN] live popup unavailable: {exc}", file=sys.stderr, flush=True)
+        return None
+    return OverlayPopup(
+        click_through=settings.overlay.click_through,
+        show_interim=settings.overlay.show_interim,
+        position=settings.overlay.position,
+    )
+
+
 async def main(args, overlay=None, tray=None) -> None:
     settings = effective_settings(args)
     ensure_kwin_rule()
@@ -457,4 +472,5 @@ def run() -> None:
         with loop:
             loop.run_until_complete(daemon_main(args, overlay, tray) if args.daemon else main(args, overlay, tray))
     else:
-        asyncio.run(daemon_main(args) if args.daemon else main(args))
+        overlay = make_overlay(settings)
+        asyncio.run(daemon_main(args, overlay) if args.daemon else main(args, overlay))

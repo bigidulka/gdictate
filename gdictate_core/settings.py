@@ -34,7 +34,7 @@ class AudioSettings:
 class PasteSettings:
     mode: str = "auto"
     live: bool = True
-    linux_terminal_combo: str = "ctrl-v"
+    linux_terminal_combo: str = "ctrl-shift-v"
     windows_combo: str = "ctrl-v"
 
 
