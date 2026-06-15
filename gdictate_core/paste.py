@@ -256,16 +256,20 @@ async def _ydotool_paste(combo: str) -> bool:
 
 async def _run_ydotool_key(keycodes: list[str]) -> bool:
     env = _ydotool_env()
-    proc = await asyncio.create_subprocess_exec(
-        "ydotool",
-        "key",
-        "-d",
-        LINUX_KEY_DELAY_MS,
-        *keycodes,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ydotool",
+            "key",
+            "-d",
+            LINUX_KEY_DELAY_MS,
+            *keycodes,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+    except FileNotFoundError:
+        print("[WARN] ydotool not found; skip key injection", file=sys.stderr, flush=True)
+        return False
     stderr = await proc.stderr.read() if proc.stderr else b""
     code = await proc.wait()
     if code == 0:
