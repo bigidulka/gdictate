@@ -71,7 +71,7 @@ impl Default for PasteSettings {
         Self {
             mode: "auto".into(),
             live: true,
-            linux_terminal_combo: "ctrl-v".into(),
+            linux_terminal_combo: "ctrl-shift-v".into(),
             windows_combo: "ctrl-v".into(),
         }
     }

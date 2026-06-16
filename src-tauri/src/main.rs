@@ -422,8 +422,8 @@ fn show_overlay(app: &AppHandle, click_through: bool, placement: &str) -> Result
 
     let window = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("index.html".into()))
         .title("gdictate live")
-        .inner_size(210.0, 26.0)
-        .min_inner_size(120.0, 22.0)
+        .inner_size(430.0, 54.0)
+        .min_inner_size(292.0, 54.0)
         .position(0.0, 0.0)
         .decorations(false)
         .transparent(true)
@@ -450,7 +450,8 @@ fn apply_overlay_position(window: &WebviewWindow, placement: &str) -> Result<(),
     };
     let work_area = monitor.work_area();
     let size = window.outer_size().map_err(|err| err.to_string())?;
-    let margin = 22_i32;
+    let margin = 32_i32;
+    let lower_margin = 150_i32;
     let work_x = work_area.position.x;
     let work_y = work_area.position.y;
     let work_w = work_area.size.width as i32;
@@ -463,9 +464,9 @@ fn apply_overlay_position(window: &WebviewWindow, placement: &str) -> Result<(),
         _ => work_x + ((work_w - width) / 2),
     };
     let y = match placement {
-        "top-center" => work_y + margin,
-        "bottom-right" => work_y + work_h - height - margin,
-        _ => work_y + ((work_h - height) * 62 / 100),
+        "top-center" => work_y + 90,
+        "bottom-right" => work_y + work_h - height - lower_margin,
+        _ => work_y + work_h - height - lower_margin,
     };
     window
         .set_position(PhysicalPosition::new(x.max(work_x), y.max(work_y)))

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import shutil
+import subprocess
 import sys
+import threading
+from array import array
 from typing import Callable, Optional
 
 from .audio import AudioRouting, configure_audio_source, get_default_source
@@ -70,6 +75,9 @@ class Dictation:
         self._live_target_text = ""
         self._live_pasted_text = ""
         self._live_paste_failed = False
+        self._level_proc: Optional[subprocess.Popen[bytes]] = None
+        self._level_stop = threading.Event()
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
         self.overlay = None
         self.tray = None
 
@@ -134,9 +142,10 @@ class Dictation:
         if self.tray:
             self.tray.set_state("recording")
         label = {"mic": "я", "speakers": "собеседник", "both": "микрофон+динамики"}.get(source, source)
+        level_source = self._audio_route.active_source or get_default_source()
         if self.overlay:
-            level_source = self._audio_route.active_source or get_default_source()
             self.overlay.show_recording_start(label, level_source)
+        self._start_level_events(level_source)
         print(f"\033[1;31m● REC\033[0m  {label}...", flush=True)
         self.emit("recording.started", channel=source)
         if not self.engine:
@@ -157,6 +166,7 @@ class Dictation:
             self.tray.set_state("finalizing")
         if self.overlay:
             self.overlay.hide_popup()
+        self._stop_level_events()
         print(flush=True)
         if self.engine:
             await self.engine.stop_recognition()
@@ -188,6 +198,62 @@ class Dictation:
         self._audio_route = AudioRouting()
         self.emit("recording.stopped", channel=self._active_source, text=text)
         return text
+
+    def _start_level_events(self, source_name: Optional[str]) -> None:
+        self._stop_level_events()
+        if not source_name or not self.on_event or not shutil.which("parec"):
+            return
+        self._level_stop.clear()
+        self._event_loop = asyncio.get_running_loop()
+        try:
+            self._level_proc = subprocess.Popen(
+                [
+                    "parec",
+                    "--raw",
+                    "--format=s16le",
+                    "--rate=16000",
+                    "--channels=1",
+                    "--latency-msec=50",
+                    "--device",
+                    source_name,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            self._level_proc = None
+            return
+        threading.Thread(target=self._read_level_events, daemon=True).start()
+
+    def _stop_level_events(self) -> None:
+        self._level_stop.set()
+        proc = self._level_proc
+        self._level_proc = None
+        if proc and proc.poll() is None:
+            proc.terminate()
+
+    def _read_level_events(self) -> None:
+        proc = self._level_proc
+        if not proc or not proc.stdout:
+            return
+        smooth = 0.0
+        while not self._level_stop.is_set() and proc.poll() is None:
+            chunk = proc.stdout.read(1600)
+            if not chunk:
+                break
+            samples = array("h")
+            samples.frombytes(chunk)
+            if sys.byteorder != "little":
+                samples.byteswap()
+            if not samples:
+                continue
+            rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768.0
+            peak = max(abs(sample) for sample in samples) / 32768.0
+            level = min(1.0, max(rms * 85.0, peak * 8.0))
+            smooth = smooth * 0.55 + level * 0.45
+            loop = self._event_loop
+            if loop and loop.is_running():
+                loop.call_soon_threadsafe(self.emit, "audio.level", level=smooth)
 
     async def toggle(self, source: Optional[str] = None) -> None:
         if self.state == State.IDLE:
@@ -254,6 +320,7 @@ class Dictation:
             await self._paste_worker
 
     async def close(self) -> None:
+        self._stop_level_events()
         await self._flush_live_paste()
         self._audio_route.close()
         if self.engine:

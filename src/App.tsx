@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
@@ -107,6 +108,7 @@ type DaemonEvent = {
   channel?: string;
   text?: string;
   confidence?: number;
+  level?: number;
   job?: FileJobStatus;
 };
 
@@ -278,7 +280,7 @@ const defaults: AppSettings = {
   paste: {
     mode: "auto",
     live: true,
-    linux_terminal_combo: "ctrl-v",
+    linux_terminal_combo: "ctrl-shift-v",
     windows_combo: "ctrl-v"
   },
   chrome: {
@@ -467,7 +469,7 @@ async function call<T>(command: string, args?: Record<string, unknown>, fallback
 }
 
 const tabs = [
-  ["app", Activity, "App"],
+  ["app", Activity, "Диктовка"],
   ["settings", Settings, "Настройки"]
 ] as const;
 
@@ -506,6 +508,8 @@ export function App() {
   const [daemon, setDaemon] = useState<DaemonStatus>(fallbackDaemonStatus);
   const [eventState, setEventState] = useState("offline");
   const [liveText, setLiveText] = useState("");
+  const [audioLevels, setAudioLevels] = useState<number[]>(Array(13).fill(0));
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [finalText, setFinalText] = useState<string[]>([]);
   const [events, setEvents] = useState<DaemonEvent[]>([]);
   const [liveReport, setLiveReport] = useState<LiveBackendReport>(fallbackLiveReport);
@@ -750,13 +754,15 @@ export function App() {
       engine: previous.engine,
       audio: previous.audio,
       paste: previous.paste,
-      chrome: previous.chrome
+      chrome: previous.chrome,
+      overlay: previous.overlay
     }) !== JSON.stringify({
       language: next.language,
       engine: next.engine,
       audio: next.audio,
       paste: next.paste,
-      chrome: next.chrome
+      chrome: next.chrome,
+      overlay: next.overlay
     });
   }
 
@@ -934,7 +940,13 @@ export function App() {
     }
     if (event.type === "recording.started") {
       setLiveText("");
+      setAudioLevels(Array(13).fill(0));
+      setRecordingStartedAt(Date.now());
       void setOverlayVisible(true);
+    }
+    if (event.type === "audio.level" && typeof event.level === "number") {
+      const level = Math.max(0, Math.min(1, event.level));
+      setAudioLevels((current) => [...current.slice(1), level]);
     }
     if (event.type === "transcript.interim") {
       setLiveText(event.text || "");
@@ -948,6 +960,8 @@ export function App() {
         setFinalText((current) => [event.text || "", ...current].slice(0, 8));
       }
       setLiveText("");
+      setRecordingStartedAt(null);
+      setAudioLevels(Array(13).fill(0));
       void setOverlayVisible(false);
     }
   }
@@ -964,105 +978,117 @@ export function App() {
         state={daemon.state}
         eventState={eventState}
         text={settings.overlay.show_interim ? liveText : ""}
+        levels={audioLevels}
+        startedAt={recordingStartedAt}
+        clickThrough={settings.overlay.click_through}
+        position={settings.overlay.position}
       />
     );
   }
 
   return (
     <main className="shell">
-      <aside className="sidebar">
-        <div className="brand">gdictate</div>
-        <div className="tabs">
+      <header className="topbar">
+        <div className="brand">
+          <strong>gdictate</strong>
+          <span>{capabilities ? `${capabilities.os} / ${capabilities.desktop}` : "loading"}</span>
+        </div>
+        <nav className="tabs" aria-label="Views">
           {tabs.map(([id, Icon, label]) => (
             <button key={id} className={id === tab ? "tab active" : "tab"} onClick={() => setTab(id)} title={label}>
               <Icon size={18} />
               <span>{label}</span>
             </button>
           ))}
+        </nav>
+        <div className="actions">
+          <button className="iconButton" onClick={save} title="Сохранить">
+            <Save size={18} />
+          </button>
         </div>
-      </aside>
+      </header>
 
       <section className="content">
-        <header className="topbar">
-          <div>
-            <h1>{activeTab?.[2]}</h1>
-            <p>{capabilities ? `${capabilities.os} / ${capabilities.desktop}` : "loading"}</p>
-          </div>
-          <div className="actions">
-            <button className="iconButton" onClick={save} title="Сохранить">
-              <Save size={18} />
-            </button>
-            <button className="iconButton" onClick={resetSettings} title="Сбросить настройки">
-              <RotateCcw size={18} />
-            </button>
-            <button className="iconButton" onClick={() => daemonCommand("daemon_command", { args: ["--setup", "--no-ui"] })} title="Chrome setup">
-              <Wand2 size={18} />
-            </button>
-          </div>
-        </header>
-
         {tab === "app" && (
           <Panel>
-            <Field label="Режим по умолчанию">
-              <Select value={settings.audio.source} options={["mic", "speakers", "both"]} onChange={(source) => patch({ audio: { ...settings.audio, source } })} />
-            </Field>
-            <div className="commandRow">
-              <button onClick={() => daemonCommand("daemon_spawn")}><Play size={16} />Daemon</button>
-              <button onClick={() => daemonCommand("daemon_start", { source: settings.audio.source })}><Mic size={16} />Start</button>
-              <button onClick={() => daemonCommand("daemon_stop")}><Square size={16} />Stop</button>
-              <button onClick={() => daemonCommand("daemon_command", { args: ["--test", "--source", settings.audio.source, "--no-ui"] })}><TestTube2 size={16} />Test 5s</button>
-            </div>
-            <div className="daemonStrip">
-              <span>{daemon.state}</span>
-              <strong>{daemon.active_source || settings.audio.source}</strong>
-              <em>{daemon.audio_router || eventState}</em>
-              <button onClick={() => refreshDaemon(true)}>Status</button>
-              <button onClick={() => daemonCommand("daemon_shutdown")}>Shutdown</button>
-            </div>
-            <section className="livePanel" aria-live="polite">
-              <div className="liveHeader">
-                <span>Live</span>
-                <strong>{daemon.active_source || settings.audio.source}</strong>
+            <section className="heroPanel">
+              <div className="daemonStrip">
+                <span className={daemon.state === "recording" ? "stateDot recording" : "stateDot"} />
+                <strong>{daemon.state}</strong>
+                <em>{daemon.active_source || settings.audio.source}</em>
+                <small>{eventState}</small>
               </div>
-              <p className={liveText ? "liveText active" : "liveText"}>{liveText || finalText[0] || "..."}</p>
-              <div className="finalList">
-                {finalText.slice(0, 3).map((text, index) => (
-                  <span key={`${text}-${index}`}>{text}</span>
-                ))}
+
+              <div className="primaryActions">
+                <button className="bigAction" onClick={() => daemonCommand("daemon_start", { source: "mic" })}>
+                  <Mic size={22} />
+                  <span>Я</span>
+                  <small>{settings.bind.mic_hold}</small>
+                </button>
+                <button className="bigAction" onClick={() => daemonCommand("daemon_start", { source: "speakers" })}>
+                  <MonitorSpeaker size={22} />
+                  <span>Собеседник</span>
+                  <small>{settings.bind.speakers_hold}</small>
+                </button>
+                <button className="stopAction" onClick={() => daemonCommand("daemon_stop")} title="Stop">
+                  <Square size={18} />
+                </button>
               </div>
+
+              <section className="livePanel" aria-live="polite">
+                <div className="liveHeader">
+                  <span>{activeTab?.[2]}</span>
+                  <strong>{daemon.active_source || settings.audio.source}</strong>
+                </div>
+                <p className={liveText ? "liveText active" : "liveText"}>{liveText || finalText[0] || "Готов"}</p>
+              </section>
+
+              <details className="inlineFold">
+                <summary>Сервис</summary>
+                <div className="commandRow compact">
+                  <button onClick={() => daemonCommand("daemon_spawn")}><Play size={16} />Запуск</button>
+                  <button onClick={() => daemonCommand("daemon_command", { args: ["--test", "--source", settings.audio.source, "--no-ui"] })}><TestTube2 size={16} />Тест</button>
+                  <button onClick={() => refreshDaemon(true)}><Activity size={16} />Статус</button>
+                  <button onClick={() => daemonCommand("daemon_shutdown")}><Square size={16} />Стоп</button>
+                </div>
+              </details>
             </section>
-            <section className="settingsSection">
-              <h2>Файл</h2>
-              <Field label="Audio/video path">
-                <input value={filePath} onChange={(event) => setFilePath(event.target.value)} placeholder="/path/to/audio-or-video" />
-              </Field>
-              <Field label="Output dir">
-                <input value={fileOutputDir} onChange={(event) => setFileOutputDir(event.target.value)} placeholder="default: source.gdictate" />
-              </Field>
-              <div className="settingsGrid">
-                <Field label="Whisper model">
-                  <Select value={fileModelSize} options={["tiny", "base", "small", "medium", "large-v3"]} onChange={setFileModelSize} />
+
+            <details className="fold" open={Boolean(activeFileJob.id || filePath)}>
+              <summary><FileAudio size={16} />Файл / видео</summary>
+              <div className="foldBody">
+                <Field label="Файл">
+                  <input value={filePath} onChange={(event) => setFilePath(event.target.value)} placeholder="/path/to/audio-or-video" />
                 </Field>
-                <Field label="Device">
-                  <Select value={fileDevice} options={["auto", "cpu", "cuda"]} onChange={setFileDevice} />
+                <Field label="Папка">
+                  <input value={fileOutputDir} onChange={(event) => setFileOutputDir(event.target.value)} placeholder="auto" />
                 </Field>
-                <Field label="Compute">
-                  <Select value={fileComputeType} options={["default", "int8", "int8_float16", "float16", "float32"]} onChange={setFileComputeType} />
-                </Field>
-                <Toggle label="Diarization" checked={fileDiarize} onChange={setFileDiarize} />
-                <Field label="Diarization backend">
-                  <Select value={fileDiarizationBackend} options={["auto", "whisperx", "pyannote", "off"]} onChange={setFileDiarizationBackend} />
-                </Field>
+                <div className="settingsGrid">
+                  <Field label="Модель">
+                    <Select value={fileModelSize} options={["tiny", "base", "small", "medium", "large-v3"]} onChange={setFileModelSize} />
+                  </Field>
+                  <Field label="Устройство">
+                    <Select value={fileDevice} options={["auto", "cpu", "cuda"]} onChange={setFileDevice} />
+                  </Field>
+                  <Field label="Compute">
+                    <Select value={fileComputeType} options={["default", "int8", "int8_float16", "float16", "float32"]} onChange={setFileComputeType} />
+                  </Field>
+                  <Toggle label="Спикеры" checked={fileDiarize} onChange={setFileDiarize} />
+                  <Field label="Backend">
+                    <Select value={fileDiarizationBackend} options={["auto", "whisperx", "pyannote", "off"]} onChange={setFileDiarizationBackend} />
+                  </Field>
+                </div>
+                <div className="commandRow">
+                  <button onClick={refreshFilePipeline}><FileAudio size={16} />Проверить</button>
+                  <button onClick={runFileTranscription}><FileAudio size={16} />Старт</button>
+                  <button onClick={refreshFileJobs}><Activity size={16} />Jobs</button>
+                  {activeFileJob.id && activeFileJob.status === "running" && (
+                    <button onClick={() => cancelFileJob(activeFileJob.id)}><Square size={16} />Cancel</button>
+                  )}
+                </div>
               </div>
-              <div className="commandRow">
-                <button onClick={refreshFilePipeline}><FileAudio size={16} />Probe</button>
-                <button onClick={runFileTranscription}><FileAudio size={16} />Start job</button>
-                <button onClick={refreshFileJobs}><Activity size={16} />Jobs</button>
-                {activeFileJob.id && activeFileJob.status === "running" && (
-                  <button onClick={() => cancelFileJob(activeFileJob.id)}><Square size={16} />Cancel</button>
-                )}
-              </div>
-            </section>
+            </details>
+
             {activeFileJob.id && (
               <section className="pipelinePanel">
                 <div className="shortcutMeta">
@@ -1076,46 +1102,35 @@ export function App() {
                 <p>{activeFileJob.message || activeFileJob.error || activeFileJob.id}</p>
               </section>
             )}
-            <section className="pipelinePanel">
-              <div className="pipelineStages">
-                {filePipeline.stages.map((stage) => (
-                  <div className="pipelineStage" key={stage.id}>
-                    <span>{stage.label}</span>
-                    <strong>{stage.status}</strong>
-                    <em>{stage.detail}</em>
-                  </div>
-                ))}
-              </div>
-              {filePipeline.media && (
-                <div className="mediaProbe">
-                  <div className="shortcutMeta">
-                    <span>{filePipeline.media.exists ? "media" : "missing"}</span>
-                    <strong>{filePipeline.media.format_name || filePipeline.media.path}</strong>
-                    <em>{filePipeline.media.duration ? `${filePipeline.media.duration.toFixed(1)}s` : filePipeline.media.error || "unknown"}</em>
-                  </div>
-                  <div className="deviceList">
-                    {filePipeline.media.streams.map((stream) => (
-                      <div className="deviceRow" key={`${stream.index}-${stream.kind}`}>
-                        <span>{stream.kind}</span>
-                        <strong>{stream.codec || `stream ${stream.index}`}</strong>
-                        <em>{[stream.channels ? `${stream.channels}ch` : "", stream.sample_rate ? `${stream.sample_rate}Hz` : "", stream.language].filter(Boolean).join(" ") || "stream"}</em>
+
+            {(filePipeline.warnings.length > 0 || filePipeline.actions.length > 0 || filePipeline.media) && (
+              <details className="fold">
+                <summary><Activity size={16} />Детали обработки</summary>
+                <div className="foldBody">
+                  <div className="pipelineStages">
+                    {filePipeline.stages.map((stage) => (
+                      <div className="pipelineStage" key={stage.id}>
+                        <span>{stage.label}</span>
+                        <strong>{stage.status}</strong>
+                        <em>{stage.detail}</em>
                       </div>
                     ))}
                   </div>
+                  {filePipeline.media && (
+                    <div className="mediaProbe">
+                      <div className="shortcutMeta">
+                        <span>{filePipeline.media.exists ? "media" : "missing"}</span>
+                        <strong>{filePipeline.media.format_name || filePipeline.media.path}</strong>
+                        <em>{filePipeline.media.duration ? `${filePipeline.media.duration.toFixed(1)}s` : filePipeline.media.error || "unknown"}</em>
+                      </div>
+                    </div>
+                  )}
+                  <NoticeList title="Warnings" items={filePipeline.warnings} />
+                  <NoticeList title="Actions" items={filePipeline.actions} />
                 </div>
-              )}
-              <div className="dependencyList">
-                {filePipeline.dependencies.map((dep) => (
-                  <div className="dependencyRow" key={dep.name}>
-                    <span>{dep.available ? "ready" : "missing"}</span>
-                    <strong>{dep.name}</strong>
-                    <em>{dep.role}</em>
-                  </div>
-                ))}
-              </div>
-              <NoticeList title="Warnings" items={filePipeline.warnings} />
-              <NoticeList title="Actions" items={filePipeline.actions} />
-            </section>
+              </details>
+            )}
+
             {(fileResult.error || fileResult.ok) && (
               <section className="pipelinePanel">
                 <div className="shortcutMeta">
@@ -1157,186 +1172,141 @@ export function App() {
 
         {tab === "settings" && (
           <Panel>
-            <section className="settingsSection">
-              <h2>Основное</h2>
-              <Field label="Язык">
-                <input value={settings.language} onChange={(event) => patch({ language: event.target.value })} />
-              </Field>
-              <Field label="Engine">
-                <Select value={settings.engine.name} options={["chrome"]} onChange={(name) => patch({ engine: { ...settings.engine, name } })} />
-              </Field>
-              <Field label="Режим по умолчанию">
-                <Select value={settings.audio.source} options={["mic", "speakers", "both"]} onChange={(source) => patch({ audio: { ...settings.audio, source } })} />
-              </Field>
-            </section>
-
-            <section className="settingsSection">
-              <h2>Chrome</h2>
+            <section className="settingsSection essential">
               <div className="settingsGrid">
-                <Field label="Channel">
-                  <Select value={settings.chrome.channel} options={["auto", "stable", "beta", "dev", "chromium", "edge"]} onChange={(channel) => patch({ chrome: { ...settings.chrome, channel } })} />
-                </Field>
-                <Toggle label="Hidden window" checked={settings.chrome.hidden} onChange={(hidden) => patch({ chrome: { ...settings.chrome, hidden } })} />
-                <Toggle label="Force setup" checked={settings.chrome.setup_required} onChange={(setup_required) => patch({ chrome: { ...settings.chrome, setup_required } })} />
-              </div>
-              <Field label="Profile directory">
-                <input value={settings.chrome.profile_dir} onChange={(event) => patch({ chrome: { ...settings.chrome, profile_dir: event.target.value } })} placeholder="default app cache profile" />
-              </Field>
-            </section>
-
-            <section className="settingsSection">
-              <h2>Аудио</h2>
-              {isLinux && (
-                <Field label="Linux router">
-                  <Select value={settings.audio.linux_router} options={["pipewire-pulse", "pulse", "manual"]} onChange={(linux_router) => patch({ audio: { ...settings.audio, linux_router } })} />
-                </Field>
-              )}
-              {isWindows && (
-                <Field label="Speakers input">
-                  <Select value={settings.audio.windows_speaker_input} options={["auto", "stereo-mix", "vb-cable", "manual"]} onChange={(windows_speaker_input) => patch({ audio: { ...settings.audio, windows_speaker_input } })} />
-                </Field>
-              )}
-              <Toggle label="Restore input after start" checked={settings.audio.restore_default_after_start} onChange={(restore_default_after_start) => patch({ audio: { ...settings.audio, restore_default_after_start } })} />
-            </section>
-
-            <section className="settingsSection">
-              <h2>Бинды и вставка</h2>
-              <div className="settingsGrid">
-                <Field label="Bind mode">
-                  <Select value={settings.bind.mode} options={["dual-hold", "toggle", "enter"]} onChange={(mode) => patch({ bind: { ...settings.bind, mode } })} />
-                </Field>
-                <Field label="Toggle">
-                  <input value={settings.bind.toggle} onChange={(event) => patch({ bind: { ...settings.bind, toggle: event.target.value } })} />
-                </Field>
-                <Field label="Mic hold">
-                  <input value={settings.bind.mic_hold} onChange={(event) => patch({ bind: { ...settings.bind, mic_hold: event.target.value } })} />
-                </Field>
-                <Field label="Speakers hold">
-                  <input value={settings.bind.speakers_hold} onChange={(event) => patch({ bind: { ...settings.bind, speakers_hold: event.target.value } })} />
-                </Field>
-                {isLinux && (
-                  <Field label="Linux backend">
-                    <Select value={settings.bind.linux_backend} options={["de-shortcut+evdev", "de-shortcut", "evdev", "terminal"]} onChange={(linux_backend) => patch({ bind: { ...settings.bind, linux_backend } })} />
-                  </Field>
-                )}
-                <Field label="Paste backend">
-                  <Select value={settings.paste.mode} options={["auto", "ydotool", "wtype", "type", "copy", "none"]} onChange={(mode) => patch({ paste: { ...settings.paste, mode } })} />
-                </Field>
-                <Toggle label="Live paste" checked={settings.paste.live} onChange={(live) => patch({ paste: { ...settings.paste, live } })} />
-                {isLinux && (
-                  <Field label="Linux paste key">
-                    <Select value={settings.paste.linux_terminal_combo} options={["ctrl-shift-v", "ctrl-v"]} onChange={(linux_terminal_combo) => patch({ paste: { ...settings.paste, linux_terminal_combo } })} />
-                  </Field>
-                )}
-                {isWindows && (
-                  <Field label="Paste combo">
-                    <Select value={settings.paste.windows_combo} options={["ctrl-v"]} onChange={(windows_combo) => patch({ paste: { ...settings.paste, windows_combo } })} />
-                  </Field>
-                )}
-              </div>
-            </section>
-
-            <section className="settingsSection">
-              <h2>Live</h2>
-              <div className="settingsGrid">
+                <Field label="Язык"><input value={settings.language} onChange={(event) => patch({ language: event.target.value })} /></Field>
+                <Field label="Канал"><Select value={settings.audio.source} options={["mic", "speakers", "both"]} onChange={(source) => patch({ audio: { ...settings.audio, source } })} /></Field>
+                <Field label="Вставка"><Select value={settings.paste.mode} options={["auto", "ydotool", "wtype", "type", "copy", "none"]} onChange={(mode) => patch({ paste: { ...settings.paste, mode } })} /></Field>
                 <Toggle label="Live popup" checked={settings.overlay.enabled} onChange={(enabled) => patchOverlay({ ...settings.overlay, enabled })} />
-                <Toggle label="Click-through" checked={settings.overlay.click_through} onChange={(click_through) => patchOverlay({ ...settings.overlay, click_through })} />
-                <Toggle label="Interim text" checked={settings.overlay.show_interim} onChange={(show_interim) => patchOverlay({ ...settings.overlay, show_interim })} />
-                <Field label="Position">
-                  <Select value={settings.overlay.position} options={["lower-center", "top-center", "bottom-right"]} onChange={(position) => patchOverlay({ ...settings.overlay, position })} />
-                </Field>
-              </div>
-              <div className="commandRow">
-                <button onClick={openLiveOverlay}><Eye size={16} />Open popup</button>
-                <button onClick={closeLiveOverlay}><EyeOff size={16} />Hide popup</button>
+                <Toggle label="Live paste" checked={settings.paste.live} onChange={(live) => patch({ paste: { ...settings.paste, live } })} />
+                <Toggle label="Скрыть Chrome" checked={settings.chrome.hidden} onChange={(hidden) => patch({ chrome: { ...settings.chrome, hidden } })} />
               </div>
             </section>
 
-            <section className="shortcutPanel">
-              <div className="shortcutMeta">
-                <span>native hotkeys</span>
-                <strong>{nativeHotkeys.backend}</strong>
-                <em>{nativeHotkeys.mode}</em>
+            <details className="fold" open>
+              <summary><Keyboard size={16} />Горячие клавиши</summary>
+              <div className="foldBody">
+                <div className="settingsGrid">
+                  <Field label="Режим">
+                    <Select value={settings.bind.mode} options={["dual-hold", "toggle", "enter"]} onChange={(mode) => patch({ bind: { ...settings.bind, mode } })} />
+                  </Field>
+                  <Field label="Я">
+                    <input value={settings.bind.mic_hold} onChange={(event) => patch({ bind: { ...settings.bind, mic_hold: event.target.value } })} />
+                  </Field>
+                  <Field label="Собеседник">
+                    <input value={settings.bind.speakers_hold} onChange={(event) => patch({ bind: { ...settings.bind, speakers_hold: event.target.value } })} />
+                  </Field>
+                  <Field label="Toggle">
+                    <input value={settings.bind.toggle} onChange={(event) => patch({ bind: { ...settings.bind, toggle: event.target.value } })} />
+                  </Field>
+                  {isLinux && (
+                    <Field label="Вставка">
+                      <Select value={settings.paste.linux_terminal_combo} options={["ctrl-shift-v", "ctrl-v"]} onChange={(linux_terminal_combo) => patch({ paste: { ...settings.paste, linux_terminal_combo } })} />
+                    </Field>
+                  )}
+                  {isWindows && (
+                    <Field label="Вставка">
+                      <Select value={settings.paste.windows_combo} options={["ctrl-v"]} onChange={(windows_combo) => patch({ paste: { ...settings.paste, windows_combo } })} />
+                    </Field>
+                  )}
+                  {isLinux && (
+                    <Field label="Backend">
+                      <Select value={settings.bind.linux_backend} options={["de-shortcut+evdev", "de-shortcut", "evdev", "terminal"]} onChange={(linux_backend) => patch({ bind: { ...settings.bind, linux_backend } })} />
+                    </Field>
+                  )}
+                </div>
+                <div className="commandRow compact">
+                  <button onClick={startHotkeys}><Keyboard size={16} />Запустить</button>
+                  <button onClick={reloadNativeHotkeys}><RotateCcw size={16} />Перезагрузить</button>
+                  {isLinux && <button onClick={() => daemonCommand("evdev_hotkeys_spawn")}><Keyboard size={16} />Evdev</button>}
+                </div>
+                <NoticeList title="Warnings" items={nativeHotkeys.warnings} />
               </div>
-              <div className="commandRow compact">
-                <button onClick={startHotkeys}><Keyboard size={16} />Start binds</button>
-                <button onClick={reloadNativeHotkeys}><RotateCcw size={16} />Reload native</button>
-                {isLinux && (
-                  <>
-                    <button onClick={() => daemonCommand("evdev_hotkeys_spawn")}><Keyboard size={16} />Start evdev binds</button>
-                    <button onClick={() => daemonCommand("evdev_hotkeys_stop")}><Square size={16} />Stop evdev binds</button>
-                  </>
-                )}
+            </details>
+
+            <details className="fold">
+              <summary><MonitorSpeaker size={16} />Аудио и popup</summary>
+              <div className="foldBody">
+                <div className="settingsGrid">
+                  <Field label="Движок">
+                    <Select value={settings.engine.name} options={["chrome"]} onChange={(name) => patch({ engine: { ...settings.engine, name } })} />
+                  </Field>
+                  <Field label="Chrome">
+                    <Select value={settings.chrome.channel} options={["auto", "stable", "beta", "dev", "chromium", "edge"]} onChange={(channel) => patch({ chrome: { ...settings.chrome, channel } })} />
+                  </Field>
+                  <Toggle label="Setup required" checked={settings.chrome.setup_required} onChange={(setup_required) => patch({ chrome: { ...settings.chrome, setup_required } })} />
+                  {isLinux && (
+                    <Field label="Router">
+                      <Select value={settings.audio.linux_router} options={["pipewire-pulse", "pulse", "manual"]} onChange={(linux_router) => patch({ audio: { ...settings.audio, linux_router } })} />
+                    </Field>
+                  )}
+                  {isWindows && (
+                    <Field label="Speakers input">
+                      <Select value={settings.audio.windows_speaker_input} options={["auto", "stereo-mix", "vb-cable", "manual"]} onChange={(windows_speaker_input) => patch({ audio: { ...settings.audio, windows_speaker_input } })} />
+                    </Field>
+                  )}
+                  <Toggle label="Restore input" checked={settings.audio.restore_default_after_start} onChange={(restore_default_after_start) => patch({ audio: { ...settings.audio, restore_default_after_start } })} />
+                  <Toggle label="Click-through" checked={settings.overlay.click_through} onChange={(click_through) => patchOverlay({ ...settings.overlay, click_through })} />
+                  <Toggle label="Interim" checked={settings.overlay.show_interim} onChange={(show_interim) => patchOverlay({ ...settings.overlay, show_interim })} />
+                  <Field label="Позиция">
+                    <Select value={settings.overlay.position} options={["lower-center", "top-center", "bottom-right"]} onChange={(position) => patchOverlay({ ...settings.overlay, position })} />
+                  </Field>
+                </div>
+                <Field label="Профиль Chrome">
+                  <input value={settings.chrome.profile_dir} onChange={(event) => patch({ chrome: { ...settings.chrome, profile_dir: event.target.value } })} placeholder="auto" />
+                </Field>
+                <div className="commandRow compact">
+                  <button onClick={openLiveOverlay}><Eye size={16} />Показать popup</button>
+                  <button onClick={closeLiveOverlay}><EyeOff size={16} />Скрыть popup</button>
+                </div>
               </div>
-              <NoticeList title="Warnings" items={nativeHotkeys.warnings} />
-              {shortcutReport && (
-                <div className="shortcutList">
-                  {shortcutReport.commands.map((item) => (
-                    <div className="shortcutRow" key={item.id}>
-                      <span>{item.label}</span>
-                      <strong>{item.suggested_key}</strong>
-                      <em>{item.mode}</em>
-                      <code>{item.command}</code>
+            </details>
+
+            <details className="fold">
+              <summary><Activity size={16} />Система</summary>
+              <div className="foldBody">
+                <div className="diagnosticsGrid">
+                  <div><span>Chrome</span><strong>{diagnostics.chrome_path || "missing"}</strong></div>
+                  <div><span>Paste</span><strong>{diagnostics.paste_backend}</strong></div>
+                  <div><span>Hotkeys</span><strong>{diagnostics.hotkey_backend}</strong></div>
+                  <div><span>Speakers</span><strong>{diagnostics.speaker_capture_ready ? "ready" : "not ready"}</strong></div>
+                </div>
+                <DeviceList title="Inputs" devices={diagnostics.microphone_devices} />
+                <DeviceList title="Outputs" devices={diagnostics.speaker_devices} />
+                <NoticeList title="Warnings" items={diagnostics.warnings} />
+                <NoticeList title="Actions" items={diagnostics.actions} />
+                <div className="dependencyList">
+                  {(diagnostics.system_actions || []).map((action) => (
+                    <div className="dependencyRow actionRow" key={action.id}>
+                      <span>{action.status}</span>
+                      <strong>{action.label}</strong>
+                      <em>{action.command || action.description || (action.manual ? "manual" : "check")}</em>
+                      <div className="rowActions">
+                        {(action.command || action.description) && (
+                          <button onClick={() => copySystemAction(action)} title="Copy command">
+                            <Clipboard size={14} />Copy
+                          </button>
+                        )}
+                        <button onClick={() => applySystemAction(action)} title={action.manual || action.requires_admin ? "Show required manual action" : "Apply action"}>
+                          <Play size={14} />Apply
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
-              )}
-            </section>
-
-            <section className="diagnosticsPanel">
-              <div className="diagnosticsGrid">
-                <div>
-                  <span>Chrome</span>
-                  <strong>{diagnostics.chrome_path || "missing"}</strong>
-                </div>
-                <div>
-                  <span>Paste</span>
-                  <strong>{diagnostics.paste_backend}</strong>
-                </div>
-                <div>
-                  <span>Hotkeys</span>
-                  <strong>{diagnostics.hotkey_backend}</strong>
-                </div>
-                <div>
-                  <span>Speaker capture</span>
-                  <strong>{diagnostics.speaker_capture_ready ? "ready" : "not ready"}</strong>
+                <div className="commandRow compact">
+                  <button onClick={load}><Activity size={16} />Обновить</button>
+                  <button onClick={async () => setPreflight(await loadPreflight())}><Activity size={16} />Preflight</button>
+                  <button onClick={() => daemonCommand("daemon_command", { args: ["--diagnostics"] })}><MonitorSpeaker size={16} />CLI</button>
+                  <button onClick={() => daemonCommand("daemon_command", { args: ["--setup", "--no-ui"] })}><Wand2 size={16} />Chrome setup</button>
+                  <button onClick={resetSettings}><RotateCcw size={16} />Сброс</button>
                 </div>
               </div>
-              <DeviceList title="Inputs" devices={diagnostics.microphone_devices} />
-              <DeviceList title="Outputs" devices={diagnostics.speaker_devices} />
-              <NoticeList title="Warnings" items={diagnostics.warnings} />
-              <NoticeList title="Actions" items={diagnostics.actions} />
-              <div className="dependencyList">
-                {(diagnostics.system_actions || []).map((action) => (
-                  <div className="dependencyRow actionRow" key={action.id}>
-                    <span>{action.status}</span>
-                    <strong>{action.label}</strong>
-                    <em>{action.command || action.description || (action.manual ? "manual" : "check")}</em>
-                    <div className="rowActions">
-                      {(action.command || action.description) && (
-                        <button onClick={() => copySystemAction(action)} title="Copy command">
-                          <Clipboard size={14} />Copy
-                        </button>
-                      )}
-                      <button onClick={() => applySystemAction(action)} title={action.manual || action.requires_admin ? "Show required manual action" : "Apply action"}>
-                        <Play size={14} />Apply
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-            <div className="commandRow">
-              <button onClick={load}><Activity size={16} />Refresh</button>
-              <button onClick={async () => setPreflight(await loadPreflight())}><Activity size={16} />Preflight</button>
-              <button onClick={() => daemonCommand("daemon_command", { args: ["--capabilities"] })}><MonitorSpeaker size={16} />CLI report</button>
-              <button onClick={() => daemonCommand("daemon_command", { args: ["--diagnostics"] })}><MonitorSpeaker size={16} />Diagnostics</button>
-            </div>
+            </details>
           </Panel>
         )}
-
-        <footer className="status">{status}</footer>
       </section>
+      <footer className="status">{status}</footer>
     </main>
   );
 
@@ -1345,11 +1315,11 @@ export function App() {
   }
 
   function patchOverlay(overlay: AppSettings["overlay"]) {
+    const previous = savedSettingsRef.current;
     const next = withSettingsDefaults({ ...settingsRef.current, overlay });
     setSettings(next);
     void persistSettings(next)
-      .then(() => applyOverlaySettings(next))
-      .then(() => setStatus(next.overlay.enabled ? "live popup settings applied" : "live popup disabled"))
+      .then(() => applySettingsRuntime(previous, next))
       .catch((error) => setStatus(String(error)));
   }
 }
@@ -1367,11 +1337,69 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function OverlayView({ channel, state, eventState, text }: { channel: string; state: string; eventState: string; text: string }) {
+function OverlayView({
+  channel,
+  state,
+  eventState,
+  text,
+  levels,
+  startedAt,
+  clickThrough,
+  position
+}: {
+  channel: string;
+  state: string;
+  eventState: string;
+  text: string;
+  levels: number[];
+  startedAt: number | null;
+  clickThrough: boolean;
+  position: string;
+}) {
+  const [now, setNow] = useState(Date.now());
+  const active = state === "recording" || Boolean(startedAt);
+  const cleanText = text.trim();
+  const elapsed = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : 0;
+  const height = cleanText ? Math.min(154, 68 + Math.ceil(cleanText.length / 42) * 19) : 54;
+  const label = channel === "speakers" ? "Собеседник" : channel === "both" ? "Микс" : "Я";
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const timer = window.setInterval(() => setNow(Date.now()), 200);
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    try {
+      void getCurrentWindow()
+        .setSize(new LogicalSize(430, height))
+        .then(() => invoke<string>("open_overlay", { clickThrough, position }))
+        .catch(() => undefined);
+    } catch {
+      return;
+    }
+  }, [active, height, clickThrough, position]);
+
   return (
-    <main className="overlayShell" aria-label={`${state} ${channel} ${eventState}`}>
-      <span className="overlayDot" />
-      <p className={text ? "overlayText active" : "overlayText"}>{text || "..."}</p>
+    <main className={cleanText ? "overlayShell hasText" : "overlayShell"} aria-label={`${state} ${channel} ${eventState}`}>
+      <section className="overlayCard">
+        <div className="overlayTop">
+          <span className="overlayDot" />
+          <div className="overlayWave" aria-hidden="true">
+            {levels.map((level, index) => (
+              <span key={index} style={{ height: `${5 + Math.round(Math.max(0, Math.min(1, level)) * 21)}px` }} />
+            ))}
+          </div>
+          <span className="overlayClock">{`${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`}</span>
+          <span className="overlayChannel">{label}</span>
+        </div>
+        {cleanText && <p className="overlayText">{cleanText}</p>}
+      </section>
     </main>
   );
 }
