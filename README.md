@@ -1,83 +1,93 @@
 # gdictate
 
-Desktop dictation and live transcription for Linux and Windows.
+Desktop dictation, live transcription, and speaker capture for Linux and Windows.
 
-gdictate turns a hotkey into text input: hold a key, speak, release, and the text is inserted into the focused app. It uses Chrome/Chromium/Edge Web Speech as the first speech engine, so there are no paid API keys or cloud project setup.
+gdictate turns speech into text where you already work. Hold a hotkey, speak, and the app sends recognized text to the focused window. It uses a local desktop shell, a Python daemon, and a browser Web Speech bridge, so there is no Google Cloud setup and no paid API key.
 
-[Download v0.3.7](https://github.com/bigidulka/gdictate/releases/tag/v0.3.7) · [Project page](https://bigidulka.github.io/gdictate/) · [Release workflow](.github/workflows/release.yml)
+[Download latest](https://github.com/bigidulka/gdictate/releases/latest) · [Project page](https://bigidulka.github.io/gdictate/) · [Build workflow](.github/workflows/release.yml)
 
-## Highlights
+## What It Does
 
-- **Two live channels:** `Alt+Left` for microphone, `Alt+Right` for speaker output.
-- **Live popup:** tiny always-on-top transcript popup, click-through capable, lower-center by default.
-- **Sequential paste:** final chunks can be inserted while dictating, not only after key release.
-- **Compact GUI:** Tauri 2 + React app with `App` and `Настройки` tabs.
-- **Shared settings core:** GUI and CLI use the same JSON settings schema.
-- **Daemon mode:** local IPC daemon for tray, native hotkeys, GUI control, and async file jobs.
-- **Hidden browser bridge:** Chrome is launched as a tiny off-screen app window with low-noise flags.
-- **Batch transcription path:** local audio/video transcription with optional diarization and TXT/SRT/VTT/JSON exports.
-- **Release packages:** AppImage, deb, rpm, Arch pacman package, Windows NSIS installer, Windows MSI.
+- **Two hold-to-talk channels:** one bind for your microphone, one bind for speaker output.
+- **Live popup:** compact lower-center transcript overlay with timer and voice level strip.
+- **Click-through overlay:** the popup can stay above apps without stealing clicks or focus.
+- **Sequential paste:** confirmed chunks can be pasted while you dictate, with final fallback on release.
+- **Compact GUI:** one main app screen with a focused settings tab.
+- **Shared core:** GUI, tray, daemon, and CLI use the same settings and runtime modules.
+- **Speaker capture:** Linux auto-detects the active speaker monitor; Windows supports loopback recording endpoints.
+- **File transcription:** optional local audio/video transcription with subtitle and JSON exports.
+- **Release packages:** AppImage, deb, rpm, Arch pacman package, Windows setup exe, and Windows MSI.
 
 ## Download
 
-Current release: [v0.3.7](https://github.com/bigidulka/gdictate/releases/tag/v0.3.7)
+Use the [latest GitHub Release](https://github.com/bigidulka/gdictate/releases/latest).
 
-| Platform | Package |
+| Platform | Asset to pick |
 |---|---|
-| Linux portable | `gdictate_0.3.7_amd64.AppImage` |
-| Debian / Ubuntu | `gdictate_0.3.7_amd64.deb` |
-| Fedora / RPM | `gdictate-0.3.7-1.x86_64.rpm` |
-| Arch / pacman | `gdictate-0.3.7-1-x86_64.pkg.tar.zst` |
-| Windows installer | `gdictate_0.3.7_x64-setup.exe` |
-| Windows MSI | `gdictate_0.3.7_x64_en-US.msi` |
+| Linux portable | AppImage |
+| Debian / Ubuntu | deb package |
+| Fedora / RPM distros | rpm package |
+| Arch / CachyOS / pacman distros | pacman package |
+| Windows | setup exe or MSI |
 
-The GitHub Actions release workflow builds all packages on tags matching `v*` and uploads them to the GitHub Release.
+For Arch-style packages:
+
+```bash
+sudo pacman -U ./gdictate-*-x86_64.pkg.tar.zst
+```
+
+After install, run `gdictate-app` from the app launcher or terminal.
 
 ## How It Works
 
 ```text
-Tauri GUI / tray / hotkeys / CLI
+Tauri app / tray / native controls
         |
         v
-Python daemon and modular core
+Python daemon and shared core
         |
-        +--> OS audio router
-        +--> OS paste backend
+        +--> hotkeys
+        +--> audio routing
+        +--> paste backend
         +--> live popup events
+        +--> file transcription jobs
         |
         v
 Hidden Chrome / Chromium / Edge Web Speech page
         |
         v
-Google Web Speech recognition
+Streaming recognition results
 ```
 
-Chrome is used only as the Web Speech bridge. gdictate starts a local HTTPS/WebSocket bridge, opens `speech-proxy.html`, receives interim/final transcript events, then routes text to popup, GUI, daemon events, and paste backends.
+The browser is only the speech bridge. gdictate runs a local HTTPS/WebSocket service, opens `speech-proxy.html`, receives interim and final recognition events, and routes text to the popup, GUI, daemon clients, and paste backend.
 
 ## Supported Systems
 
 | System | Status |
 |---|---|
-| Linux + GNOME/KDE/Wayland | Primary target. GUI popup, tray, PipeWire/Pulse routing, wl-copy paste. |
-| Arch / CachyOS | Tested path. pacman package generated by `scripts/package-arch.sh`. |
-| Ubuntu / Debian | deb package and bootstrap script. |
-| Fedora / RPM | rpm package and bootstrap script. |
-| Windows | GUI package, native shortcut path, microphone input, manual/virtual speaker input. |
+| Linux + Wayland + GNOME/KDE | Primary target: GUI popup, tray, PipeWire/Pulse routing, clipboard paste, evdev hold hotkeys. |
+| Arch / CachyOS | Main package path through the pacman release asset. |
+| Debian / Ubuntu | deb package plus source bootstrap path. |
+| Fedora / RPM distros | rpm package plus source bootstrap path. |
+| Windows | Desktop package, microphone dictation, paste backend, and loopback-based speaker capture. |
 | macOS | Not targeted yet. |
 
-Linux hotkeys:
+Linux notes:
 
-- On Wayland, real global hold-to-talk usually needs evdev access.
-- Add the user to the `input` group, then log out and back in.
-- GNOME custom shortcuts do not expose key release, so use Tauri/evdev hold mode or toggle commands.
+- Hold hotkeys on Wayland need access to input devices.
+- Add your user to the `input` group, log out, then log back in.
+- Paste uses clipboard plus a key-injection backend such as `ydotool` or `wtype`.
+- Speaker mode follows the current default PipeWire/Pulse speaker monitor.
 
-Windows speaker transcription:
+Windows notes:
 
-- Chrome Web Speech can listen only to recording inputs.
-- Speaker mode needs Stereo Mix, VB-CABLE, Virtual Audio Cable, Voicemeeter, or a similar loopback recording endpoint.
-- gdictate reports this clearly; it does not install audio drivers.
+- Microphone dictation works through the default recording input.
+- Speaker transcription needs a loopback input such as Stereo Mix, VB-CABLE, Virtual Audio Cable, or Voicemeeter.
+- gdictate reports missing Windows audio setup instead of installing drivers.
 
 ## Quick Start From Source
+
+Linux:
 
 ```bash
 git clone https://github.com/bigidulka/gdictate.git
@@ -86,7 +96,7 @@ cd gdictate
 .venv/bin/python gdictate.py --daemon --no-ui
 ```
 
-Run the desktop app in development:
+Desktop app in development:
 
 ```bash
 npm run bootstrap:linux
@@ -100,33 +110,31 @@ Windows:
 npm run tauri:dev
 ```
 
-Optional system dependency install:
+Optional system dependencies:
 
 ```bash
 ./install.sh --install-system
 ```
 
-Optional batch transcription dependencies:
+Optional local file transcription dependencies:
 
 ```bash
 ./install.sh --with-batch
-# or
-.venv/bin/python gdictate.py --apply-system-action install_batch_extras
 ```
 
 ## Daily Use
 
-Default language is `ru-RU`.
+Default controls:
 
 | Action | Default |
 |---|---|
 | Hold microphone channel | `Alt+Left` |
 | Hold speaker channel | `Alt+Right` |
 | Stop recording | release the held key |
-| Open settings | tray menu or main Tauri window |
-| Disable popup | `Настройки` -> `Live` -> `Live popup` |
+| Open app settings | tray menu or main window |
+| Disable popup | Settings -> Live -> Live popup |
 
-Useful commands:
+Useful daemon commands:
 
 ```bash
 .venv/bin/python gdictate.py --status
@@ -151,26 +159,26 @@ Diagnostics:
 
 The app stores settings in the user config directory:
 
-- Linux: `~/.config/gdictate/settings.json`
-- Windows: `%APPDATA%\gdictate\settings.json`
-
-The GUI and CLI use the same schema from `gdictate_core.settings`.
+| OS | Settings path |
+|---|---|
+| Linux | `~/.config/gdictate/settings.json` |
+| Windows | `%APPDATA%\gdictate\settings.json` |
 
 Main settings groups:
 
-- **General:** language, speech engine, default channel.
-- **Chrome:** browser channel, hidden automation window, setup flow, profile directory.
-- **Audio:** Linux router, Windows speaker input, input restore behavior.
-- **Binds:** hold/toggle mode, mic/speakers hotkeys, Linux backend.
-- **Paste:** paste backend, direct type mode, clipboard-only mode, live paste, terminal paste combo.
+- **General:** language, engine, default channel.
+- **Chrome:** browser channel, hidden window mode, profile path, setup flow.
+- **Audio:** microphone source, speaker source, Linux routing, Windows loopback input.
+- **Binds:** hold or toggle mode, mic bind, speakers bind, Linux hotkey backend.
+- **Paste:** paste backend, terminal paste combo, live paste, clipboard-only mode.
 - **Live:** popup enabled, click-through, interim text, position.
+- **Files:** local transcription model, output formats, diarization options.
 
-Changing live popup settings applies immediately. Changing daemon-bound settings is saved and the daemon is restarted when idle.
+Live popup settings apply immediately. Daemon-bound settings are saved and applied through daemon restart when the runtime is idle.
 
 ## CLI Reference
 
 ```bash
-.venv/bin/python gdictate.py --version
 .venv/bin/python gdictate.py --lang en-US
 .venv/bin/python gdictate.py --source mic
 .venv/bin/python gdictate.py --source speakers
@@ -196,7 +204,6 @@ Daemon IPC:
 ```bash
 .venv/bin/python gdictate.py --daemon --no-ui
 .venv/bin/python gdictate.py --daemon-hotkeys
-.venv/bin/python gdictate.py --status
 .venv/bin/python gdictate.py --toggle mic
 .venv/bin/python gdictate.py --toggle speakers
 ```
@@ -219,16 +226,16 @@ File transcription:
 |---|---|
 | `gdictate.py` | Compatibility entrypoint. |
 | `gdictate_core/app.py` | Dictation state machine and transcript routing. |
-| `gdictate_core/chrome.py` | Chrome/WebSpeech bridge, HTTPS server, WebSocket messages. |
+| `gdictate_core/chrome.py` | Browser Web Speech bridge, local HTTPS server, WebSocket messages. |
 | `gdictate_core/audio.py` | Linux PipeWire/Pulse routing and Windows speaker-input guidance. |
-| `gdictate_core/paste.py` | Linux wl-copy + ydotool/wtype, direct ydotool type mode with clipboard copy, clipboard-only mode, Windows clipboard + Ctrl+V. |
+| `gdictate_core/paste.py` | Clipboard, direct typing, live paste, and platform paste backends. |
 | `gdictate_core/hotkeys.py` | Linux evdev hold/toggle listeners. |
 | `gdictate_core/ipc.py` | Local daemon HTTP/WebSocket control server. |
 | `gdictate_core/settings.py` | Shared dataclass settings and schema. |
 | `gdictate_core/platforms.py` | Capability reports, diagnostics, safe system actions. |
 | `gdictate_core/file_jobs.py` | Batch ASR/diarization jobs and exports. |
 | `src/` | React UI. |
-| `src-tauri/` | Tauri shell, tray, native hotkeys, popup window, daemon supervisor. |
+| `src-tauri/` | Desktop shell, tray, native windows, popup window, daemon supervisor. |
 | `speech-proxy.html` | Browser Web Speech page. |
 
 ## IPC API
@@ -241,7 +248,7 @@ The daemon listens on `127.0.0.1:9877`.
 | `POST /start` | Start `mic`, `speakers`, or `both`. |
 | `POST /stop` | Stop recording and finalize text. |
 | `POST /toggle` | Toggle recording. |
-| `GET /events` | WebSocket stream of engine, recording, transcript, and file-job events. |
+| `GET /events` | WebSocket stream of engine, recording, transcript, audio level, and file-job events. |
 | `GET /file-jobs` | List file transcription jobs. |
 | `POST /file-jobs` | Start a file transcription job. |
 | `GET /file-jobs/{id}` | Read job state/result. |
@@ -269,33 +276,27 @@ Windows packages:
 npm run tauri:build:windows
 ```
 
-All packages:
-
-```bash
-npm run tauri:build:all
-```
-
 ## Release
 
-1. Update versions in `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and `gdictate_core/constants.py`.
-2. Push to `main`.
-3. Tag the release:
+The release workflow builds package assets for tags matching `v*` and uploads them to the matching GitHub Release.
+
+Release checklist:
 
 ```bash
-git tag -a v0.3.7 -m "gdictate v0.3.7"
-git push origin v0.3.7
+# Update package manifests first.
+git commit -m "Release <tag>"
+git tag <tag>
+git push origin main <tag>
 ```
 
-The release workflow builds:
+Built assets:
 
 - Linux AppImage
 - Linux deb
 - Linux rpm
 - Arch pacman package
-- Windows NSIS setup exe
+- Windows setup exe
 - Windows MSI
-
-On tag runs, the workflow uploads these packages to the GitHub Release.
 
 ## License
 
