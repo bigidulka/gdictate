@@ -253,7 +253,7 @@ class Dictation:
             smooth = smooth * 0.55 + level * 0.45
             loop = self._event_loop
             if loop and loop.is_running():
-                loop.call_soon_threadsafe(self.emit, "audio.level", level=smooth)
+                loop.call_soon_threadsafe(lambda value=smooth: self.emit("audio.level", level=value))
 
     async def toggle(self, source: Optional[str] = None) -> None:
         if self.state == State.IDLE:

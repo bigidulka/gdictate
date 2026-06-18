@@ -180,15 +180,32 @@ def _python_command() -> str:
 
 
 def _gui_command() -> str:
+    override = os.environ.get("GDICTATE_GUI_EXEC")
+    if override:
+        return override
     if os.name == "nt":
         release = PROJECT_DIR / "src-tauri" / "target" / "release" / "gdictate-app.exe"
         if release.exists():
             return str(release)
+        installed = shutil.which("gdictate-app")
+        if installed and _is_packaged_project():
+            return installed
         return "npm run tauri:dev"
     release = PROJECT_DIR / "src-tauri" / "target" / "release" / "gdictate-app"
     if release.exists():
         return str(release)
+    installed = shutil.which("gdictate-app")
+    if installed and _is_packaged_project():
+        return installed
     return f"sh -lc 'cd {PROJECT_DIR} && npm run tauri:dev'"
+
+
+def _is_packaged_project() -> bool:
+    try:
+        project = PROJECT_DIR.resolve()
+    except OSError:
+        project = PROJECT_DIR
+    return str(project).startswith(("/usr/lib/gdictate", "/opt/gdictate"))
 
 
 def _desktop_entry(command: str, icon_path: Path) -> str:
