@@ -46,6 +46,10 @@ class Dictation:
         chrome_channel: str = "auto",
         chrome_hidden: bool = True,
         chrome_profile_dir: str = "",
+        transcriber_endpoint: str = "",
+        transcriber_model: str = "gpt-4o-transcribe",
+        transcriber_timeout_seconds: int = 120,
+        transcriber_api_key_env: str = "GDICTATE_TRANSCRIBER_API_KEY",
         on_event: Optional[EventHandler] = None,
     ):
         self.language = language
@@ -63,6 +67,10 @@ class Dictation:
         self.chrome_channel = chrome_channel
         self.chrome_hidden = chrome_hidden
         self.chrome_profile_dir = chrome_profile_dir
+        self.transcriber_endpoint = transcriber_endpoint
+        self.transcriber_model = transcriber_model
+        self.transcriber_timeout_seconds = transcriber_timeout_seconds
+        self.transcriber_api_key_env = transcriber_api_key_env
         self.on_event = on_event
         self.state = State.IDLE
         self.engine: Optional[SpeechEngine] = None
@@ -119,6 +127,10 @@ class Dictation:
             chrome_channel=self.chrome_channel,
             chrome_hidden=self.chrome_hidden,
             chrome_profile_dir=self.chrome_profile_dir,
+            transcriber_endpoint=self.transcriber_endpoint,
+            transcriber_model=self.transcriber_model,
+            transcriber_timeout_seconds=self.transcriber_timeout_seconds,
+            transcriber_api_key_env=self.transcriber_api_key_env,
         )
         await self.engine.start(on_transcript=self.on_transcript)
         print(f"[ENGINE] Connecting: {self.engine.name}", flush=True)
@@ -169,7 +181,11 @@ class Dictation:
         self._stop_level_events()
         print(flush=True)
         if self.engine:
-            await self.engine.stop_recognition()
+            try:
+                await self.engine.stop_recognition()
+            except RuntimeError as exc:
+                print(f"[ERR] {self.engine.name} transcription failed: {exc}", file=sys.stderr, flush=True)
+                self.emit("engine.error", engine=self.engine.name, error=str(exc))
         await asyncio.sleep(0.3)
 
         text = (self._full_text or " ".join(self._final_segments)).strip()
@@ -267,6 +283,7 @@ class Dictation:
             "language": self.language,
             "engine": self.engine_name,
             "chrome_channel": self.chrome_channel,
+            "transcriber_endpoint": self.transcriber_endpoint,
             "audio_source": self.audio_source,
             "audio_router": self._audio_route.router or self.audio_linux_router,
             "windows_speaker_input": self.audio_windows_speaker_input,

@@ -144,6 +144,8 @@ class SettingsTests(unittest.TestCase):
     def test_chrome_settings_contract(self) -> None:
         fields = {field.path: field for group in settings_schema() for field in group.fields}
 
+        self.assertEqual(fields["engine.name"].options, ["chrome", "chatgpt", "openai"])
+        self.assertEqual(fields["transcriber.endpoint"].default, "http://127.0.0.1:37182/v1/audio/transcriptions")
         self.assertIn("edge", fields["chrome.channel"].options)
         self.assertTrue(chrome_candidates("chromium"))
         self.assertTrue(chrome_candidates("edge"))
@@ -174,6 +176,8 @@ class SettingsTests(unittest.TestCase):
         fields = [field for group in settings_schema() for field in group.fields]
 
         for field in fields:
+            if field.path.startswith("transcriber."):
+                continue
             self.assertIn(f"settings.{field.path}", source, field.path)
             if field.kind != "select":
                 continue

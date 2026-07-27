@@ -14,6 +14,14 @@ class EngineSettings:
 
 
 @dataclass
+class TranscriberSettings:
+    endpoint: str = "http://127.0.0.1:37182/v1/audio/transcriptions"
+    model: str = "gpt-4o-transcribe"
+    timeout_seconds: int = 120
+    api_key_env: str = "GDICTATE_TRANSCRIBER_API_KEY"
+
+
+@dataclass
 class BindingSettings:
     mode: str = "dual-hold"
     toggle: str = "CTRL+ALT"
@@ -62,6 +70,7 @@ class AppSettings:
     audio: AudioSettings = field(default_factory=AudioSettings)
     paste: PasteSettings = field(default_factory=PasteSettings)
     chrome: ChromeSettings = field(default_factory=ChromeSettings)
+    transcriber: TranscriberSettings = field(default_factory=TranscriberSettings)
     overlay: OverlaySettings = field(default_factory=OverlaySettings)
 
 
@@ -121,7 +130,7 @@ def settings_schema() -> list[SettingsGroup]:
             "General",
             [
                 _field(defaults, "language", "Language", "string", description="BCP-47 speech locale, e.g. ru-RU/en-US"),
-                _field(defaults, "engine.name", "Speech engine", "select", ["chrome"]),
+                _field(defaults, "engine.name", "Speech engine", "select", ["chrome", "chatgpt", "openai"]),
                 _field(defaults, "audio.source", "Default channel", "select", ["mic", "speakers", "both"]),
             ],
         ),
@@ -163,6 +172,16 @@ def settings_schema() -> list[SettingsGroup]:
                 _field(defaults, "chrome.hidden", "Hidden automation window", "bool"),
                 _field(defaults, "chrome.setup_required", "Force setup flow", "bool"),
                 _field(defaults, "chrome.profile_dir", "Profile directory", "path"),
+            ],
+        ),
+        SettingsGroup(
+            "transcriber",
+            "Transcriber",
+            [
+                _field(defaults, "transcriber.endpoint", "OpenAI-compatible endpoint", "string", description="ChatGPT bridge or any /v1/audio/transcriptions endpoint"),
+                _field(defaults, "transcriber.model", "Model", "string"),
+                _field(defaults, "transcriber.timeout_seconds", "Timeout seconds", "number"),
+                _field(defaults, "transcriber.api_key_env", "API key environment variable", "string", description="Optional; empty means no Authorization header"),
             ],
         ),
         SettingsGroup(

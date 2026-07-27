@@ -13,7 +13,8 @@ gdictate turns speech into text where you already work. Hold a hotkey, speak, an
 - **Click-through overlay:** the popup can stay above apps without stealing clicks or focus.
 - **Sequential paste:** confirmed chunks can be pasted while you dictate, with final fallback on release.
 - **Compact GUI:** one main app screen with a focused settings tab.
-- **Shared core:** GUI, tray, daemon, and CLI use the same settings and runtime modules.
+- **Shared core:** GUI, tray, daemon, and CLI use same settings and runtime modules.
+- **Two live STT engines:** Chrome Web Speech gives interim text; ChatGPT bridge or any OpenAI-compatible `/v1/audio/transcriptions` endpoint gives normalized final text.
 - **Speaker capture:** Linux auto-detects the active speaker monitor; Windows supports loopback recording endpoints.
 - **File transcription:** optional local audio/video transcription with subtitle and JSON exports.
 - **Release packages:** AppImage, deb, rpm, Arch pacman package, Windows setup exe, and Windows MSI.
@@ -53,13 +54,13 @@ Python daemon and shared core
         +--> file transcription jobs
         |
         v
-Hidden Chrome / Chromium / Edge Web Speech page
-        |
-        v
-Streaming recognition results
+Hidden Chrome / Chromium / Edge Web Speech page ──> streaming results
+or OpenAI-compatible STT endpoint ──> final result
 ```
 
-The browser is only the speech bridge. gdictate runs a local HTTPS/WebSocket service, opens `speech-proxy.html`, receives interim and final recognition events, and routes text to the popup, GUI, daemon clients, and paste backend.
+Chrome engine runs local HTTPS/WebSocket service and hidden `speech-proxy.html` for interim/final events. `chatgpt` captures current PipeWire/Pulse default source on release, posts WAV to local ChatGPT bridge, then emits same normalized final event. `openai` uses any compatible endpoint. All engines share hotkeys, audio routing, popup, daemon IPC, and paste path.
+
+> ChatGPT Web transcription endpoint is unofficial and may change. Keep its bridge loopback-only. Never expose session credentials or bridge port.
 
 ## Supported Systems
 
@@ -168,6 +169,7 @@ Main settings groups:
 
 - **General:** language, engine, default channel.
 - **Chrome:** browser channel, hidden window mode, profile path, setup flow.
+- **Transcriber:** ChatGPT bridge or generic OpenAI-compatible endpoint, model, timeout, optional API-key environment variable.
 - **Audio:** microphone source, speaker source, Linux routing, Windows loopback input.
 - **Binds:** hold or toggle mode, mic bind, speakers bind, Linux hotkey backend.
 - **Paste:** paste backend, terminal paste combo, live paste, clipboard-only mode.
@@ -195,6 +197,10 @@ Live popup settings apply immediately. Daemon-bound settings are saved and appli
 .venv/bin/python gdictate.py --chrome-profile-dir ./tmp/chrome-profile
 .venv/bin/python gdictate.py --no-chrome-hidden
 .venv/bin/python gdictate.py --setup
+# ChatGPT bridge default: http://127.0.0.1:37182/v1/audio/transcriptions
+.venv/bin/python gdictate.py --engine chatgpt --test --no-ui
+# Any compatible endpoint; optional bearer token is read from named environment variable.
+GDICTATE_TRANSCRIBER_API_KEY=... .venv/bin/python gdictate.py --engine openai --transcriber-endpoint http://127.0.0.1:9000/v1/audio/transcriptions --test --no-ui
 .venv/bin/python gdictate.py --save-settings
 .venv/bin/python gdictate.py --reset-settings
 ```
@@ -227,6 +233,7 @@ File transcription:
 | `gdictate.py` | Compatibility entrypoint. |
 | `gdictate_core/app.py` | Dictation state machine and transcript routing. |
 | `gdictate_core/chrome.py` | Browser Web Speech bridge, local HTTPS server, WebSocket messages. |
+| `gdictate_core/openai_compatible.py` | Capture-to-OpenAI-compatible STT engine; ChatGPT loopback bridge specialization. |
 | `gdictate_core/audio.py` | Linux PipeWire/Pulse routing and Windows speaker-input guidance. |
 | `gdictate_core/paste.py` | Clipboard, direct typing, live paste, and platform paste backends. |
 | `gdictate_core/hotkeys.py` | Linux evdev hold/toggle listeners. |

@@ -4,6 +4,7 @@ from typing import Callable, Protocol
 
 from .chrome import SpeechProxy
 from .models import TranscriptResult
+from .openai_compatible import ChatGPTSpeechEngine, OpenAICompatibleSpeechEngine
 
 
 TranscriptHandler = Callable[[TranscriptResult], None]
@@ -43,6 +44,10 @@ def create_engine(
     chrome_channel: str = "auto",
     chrome_hidden: bool = True,
     chrome_profile_dir: str = "",
+    transcriber_endpoint: str = "",
+    transcriber_model: str = "gpt-4o-transcribe",
+    transcriber_timeout_seconds: int = 120,
+    transcriber_api_key_env: str = "GDICTATE_TRANSCRIBER_API_KEY",
 ) -> SpeechEngine:
     if engine == "chrome":
         return ChromeSpeechEngine(
@@ -53,4 +58,15 @@ def create_engine(
             profile_dir=chrome_profile_dir,
             channel=chrome_channel,
         )
+    common = {
+        "language": language,
+        "model": transcriber_model,
+        "timeout_seconds": transcriber_timeout_seconds,
+        "api_key_env": transcriber_api_key_env,
+        "debug": debug,
+    }
+    if engine == "chatgpt":
+        return ChatGPTSpeechEngine(endpoint=transcriber_endpoint or "http://127.0.0.1:37182/v1/audio/transcriptions", **common)
+    if engine == "openai":
+        return OpenAICompatibleSpeechEngine(endpoint=transcriber_endpoint, **common)
     raise ValueError(f"unsupported speech engine: {engine}")

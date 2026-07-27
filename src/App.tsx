@@ -50,6 +50,12 @@ type AppSettings = {
     setup_required: boolean;
     profile_dir: string;
   };
+  transcriber: {
+    endpoint: string;
+    model: string;
+    timeout_seconds: number;
+    api_key_env: string;
+  };
   overlay: {
     enabled: boolean;
     click_through: boolean;
@@ -289,6 +295,12 @@ const defaults: AppSettings = {
     setup_required: false,
     profile_dir: ""
   },
+  transcriber: {
+    endpoint: "http://127.0.0.1:37182/v1/audio/transcriptions",
+    model: "gpt-4o-transcribe",
+    timeout_seconds: 120,
+    api_key_env: "GDICTATE_TRANSCRIBER_API_KEY"
+  },
   overlay: {
     enabled: true,
     click_through: true,
@@ -482,6 +494,7 @@ function withSettingsDefaults(value: Partial<AppSettings>): AppSettings {
     audio: { ...defaults.audio, ...(value.audio || {}) },
     paste: { ...defaults.paste, ...(value.paste || {}) },
     chrome: { ...defaults.chrome, ...(value.chrome || {}) },
+    transcriber: { ...defaults.transcriber, ...(value.transcriber || {}) },
     overlay: {
       ...defaults.overlay,
       ...(value.overlay || {}),
@@ -1229,7 +1242,7 @@ export function App() {
               <div className="foldBody">
                 <div className="settingsGrid">
                   <Field label="Движок">
-                    <Select value={settings.engine.name} options={["chrome"]} onChange={(name) => patch({ engine: { ...settings.engine, name } })} />
+                    <Select value={settings.engine.name} options={["chrome", "chatgpt", "openai"]} onChange={(name) => patch({ engine: { ...settings.engine, name } })} />
                   </Field>
                   <Field label="Chrome">
                     <Select value={settings.chrome.channel} options={["auto", "stable", "beta", "dev", "chromium", "edge"]} onChange={(channel) => patch({ chrome: { ...settings.chrome, channel } })} />
@@ -1252,6 +1265,18 @@ export function App() {
                     <Select value={settings.overlay.position} options={["lower-center", "top-center", "bottom-right"]} onChange={(position) => patchOverlay({ ...settings.overlay, position })} />
                   </Field>
                 </div>
+                {settings.engine.name !== "chrome" && (
+                  <>
+                    <Field label="STT endpoint">
+                      <input value={settings.transcriber.endpoint} onChange={(event) => patch({ transcriber: { ...settings.transcriber, endpoint: event.target.value } })} placeholder="http://127.0.0.1:37182/v1/audio/transcriptions" />
+                    </Field>
+                    <div className="settingsGrid">
+                      <Field label="STT model"><input value={settings.transcriber.model} onChange={(event) => patch({ transcriber: { ...settings.transcriber, model: event.target.value } })} /></Field>
+                      <Field label="Timeout, s"><input type="number" min="5" value={settings.transcriber.timeout_seconds} onChange={(event) => patch({ transcriber: { ...settings.transcriber, timeout_seconds: Math.max(5, Number(event.target.value) || 120) } })} /></Field>
+                      <Field label="API key env"><input value={settings.transcriber.api_key_env} onChange={(event) => patch({ transcriber: { ...settings.transcriber, api_key_env: event.target.value } })} placeholder="optional" /></Field>
+                    </div>
+                  </>
+                )}
                 <Field label="Профиль Chrome">
                   <input value={settings.chrome.profile_dir} onChange={(event) => patch({ chrome: { ...settings.chrome, profile_dir: event.target.value } })} placeholder="auto" />
                 </Field>

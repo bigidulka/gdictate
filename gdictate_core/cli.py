@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Google Speech Dictation")
     parser.add_argument("--version", action="version", version=f"gdictate {VERSION}")
     parser.add_argument("--lang", default=None)
-    parser.add_argument("--engine", default=None, choices=["chrome"])
+    parser.add_argument("--engine", default=None, choices=["chrome", "chatgpt", "openai"])
     parser.add_argument("--key", default=None)
     parser.add_argument("--bind-mode", default=None, choices=["dual-hold", "toggle", "enter"])
     parser.add_argument("--paste", default=None, choices=["auto", "ydotool", "wtype", "type", "copy", "none"])
@@ -43,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chrome-profile-dir", default=None)
     parser.add_argument("--chrome-hidden", default=None, action=argparse.BooleanOptionalAction)
     parser.add_argument("--chrome-setup-required", default=None, action=argparse.BooleanOptionalAction)
+    parser.add_argument("--transcriber-endpoint", default=None, help="OpenAI-compatible /v1/audio/transcriptions endpoint")
+    parser.add_argument("--transcriber-model", default=None, help="Model field sent to OpenAI-compatible transcriber")
+    parser.add_argument("--transcriber-timeout", type=int, default=None, help="Transcriber request timeout in seconds")
+    parser.add_argument("--transcriber-api-key-env", default=None, help="Environment variable carrying optional transcriber API key")
     parser.add_argument("--setup", action="store_true", help="Force browser setup")
     parser.add_argument("--test", action="store_true", help="5s test recording")
     parser.add_argument("--debug", action="store_true", help="Show all WS messages")
@@ -125,6 +129,14 @@ def effective_settings(args: argparse.Namespace) -> AppSettings:
         settings.chrome.hidden = args.chrome_hidden
     if args.chrome_setup_required is not None:
         settings.chrome.setup_required = args.chrome_setup_required
+    if args.transcriber_endpoint is not None:
+        settings.transcriber.endpoint = args.transcriber_endpoint
+    if args.transcriber_model is not None:
+        settings.transcriber.model = args.transcriber_model
+    if args.transcriber_timeout is not None:
+        settings.transcriber.timeout_seconds = args.transcriber_timeout
+    if args.transcriber_api_key_env is not None:
+        settings.transcriber.api_key_env = args.transcriber_api_key_env
     return settings
 
 
@@ -145,6 +157,10 @@ def make_dictation(settings: AppSettings, args: argparse.Namespace) -> Dictation
         chrome_channel=settings.chrome.channel,
         chrome_hidden=settings.chrome.hidden,
         chrome_profile_dir=settings.chrome.profile_dir,
+        transcriber_endpoint=settings.transcriber.endpoint,
+        transcriber_model=settings.transcriber.model,
+        transcriber_timeout_seconds=settings.transcriber.timeout_seconds,
+        transcriber_api_key_env=settings.transcriber.api_key_env,
     )
 
 
@@ -184,7 +200,7 @@ async def main(args, overlay=None, tray=None) -> None:
         print(f"║  Audio:{settings.audio.source:<30}║", flush=True)
         print("╚═══════════════════════════════════════╝", flush=True)
 
-        need_setup = args.setup or settings.chrome.setup_required or not is_browser_configured(settings.chrome.profile_dir)
+        need_setup = settings.engine.name == "chrome" and (args.setup or settings.chrome.setup_required or not is_browser_configured(settings.chrome.profile_dir))
         if need_setup:
             print("\n[SETUP] First run — opening Chrome to grant microphone permission.", flush=True)
             print("        Click 'Allow' when prompted, then close Chrome.\n", flush=True)
@@ -253,7 +269,7 @@ async def daemon_main(args, overlay=None, tray=None) -> None:
     dictation = None
 
     try:
-        need_setup = settings.chrome.setup_required or not is_browser_configured(settings.chrome.profile_dir)
+        need_setup = settings.engine.name == "chrome" and (settings.chrome.setup_required or not is_browser_configured(settings.chrome.profile_dir))
         if need_setup:
             print("[SETUP] Microphone permission missing; opening Chrome setup window.", flush=True)
             print("[SETUP] Click 'Allow' for microphone access. Daemon will continue after permission is saved.", flush=True)
