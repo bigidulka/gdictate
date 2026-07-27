@@ -144,11 +144,13 @@ async def _copy_linux(text: str) -> bool:
     verified = await _wait_linux_clipboard_text(text)
     if verified:
         print("[PASTE] clipboard verified", file=sys.stderr, flush=True)
-        return True
-    print("[WARN] clipboard verification failed; paste skipped", file=sys.stderr, flush=True)
-    if code is None and proc.returncode is None:
-        proc.terminate()
-    return False
+    else:
+        # wl-copy successfully accepted input. Verification is racy under
+        # Wayland because another clipboard client may own or inspect the
+        # selection before wl-paste reads it. Never drop a recognized phrase
+        # merely because this optional read-back lost that race.
+        print("[WARN] clipboard read-back failed; attempting paste", file=sys.stderr, flush=True)
+    return True
 
 
 async def _reap_process(proc: asyncio.subprocess.Process) -> None:
@@ -200,6 +202,11 @@ async def _wait_linux_modifiers_released() -> None:
         for path in evdev.list_devices():
             try:
                 device = evdev.InputDevice(path)
+                # ydotool reports its own synthetic modifier state. Waiting
+                # on it makes a completed physical hold look permanently held.
+                if "ydotool" in device.name.lower() or "virtual" in device.name.lower():
+                    device.close()
+                    continue
                 keys = set(device.active_keys())
                 device.close()
             except Exception:
