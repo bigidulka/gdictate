@@ -32,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--engine", default=None, choices=["chrome", "chatgpt", "openai"])
     parser.add_argument("--key", default=None)
     parser.add_argument("--bind-mode", default=None, choices=["dual-hold", "toggle", "enter"])
+    parser.add_argument("--mic-hold", default=None, help="Hold hotkey for microphone channel, e.g. F8")
+    parser.add_argument("--speakers-hold", default=None, help="Hold hotkey for speaker channel, e.g. F9")
     parser.add_argument("--paste", default=None, choices=["auto", "ydotool", "wtype", "type", "copy", "none"])
     parser.add_argument("--live-paste", default=None, action=argparse.BooleanOptionalAction, help="Paste final chunks while dictating")
     parser.add_argument("--linux-paste-key", default=None, choices=["ctrl-v", "ctrl-shift-v"], help="Linux paste shortcut sent by ydotool/wtype")
@@ -109,6 +111,10 @@ def effective_settings(args: argparse.Namespace) -> AppSettings:
         settings.bind.toggle = args.key
     if args.bind_mode:
         settings.bind.mode = args.bind_mode
+    if args.mic_hold:
+        settings.bind.mic_hold = args.mic_hold
+    if args.speakers_hold:
+        settings.bind.speakers_hold = args.speakers_hold
     if args.paste:
         settings.paste.mode = args.paste
     if args.live_paste is not None:
@@ -248,7 +254,7 @@ async def main(args, overlay=None, tray=None) -> None:
             await run_stdin_toggle(dictation)
         elif settings.bind.mode == "dual-hold":
             use_evdev = settings.bind.linux_backend in ("de-shortcut+evdev", "evdev")
-            if use_evdev and not await run_dual_hold_evdev(dictation):
+            if use_evdev and not await run_dual_hold_evdev(dictation, settings.bind.mic_hold, settings.bind.speakers_hold):
                 await run_stdin_toggle(dictation)
             elif not use_evdev:
                 await run_stdin_toggle(dictation)
@@ -389,7 +395,7 @@ async def daemon_hotkeys_main(args) -> None:
 
     if settings.bind.mode != "dual-hold":
         print(f"[WARN] daemon hotkeys use dual-hold; current mode is {settings.bind.mode}", file=sys.stderr, flush=True)
-    ok = await run_dual_hold_evdev_actions(on_start, on_stop)
+    ok = await run_dual_hold_evdev_actions(on_start, on_stop, settings.bind.mic_hold, settings.bind.speakers_hold)
     if not ok:
         sys.exit(2)
 

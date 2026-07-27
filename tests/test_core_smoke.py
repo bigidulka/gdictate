@@ -16,6 +16,7 @@ from gdictate_core.app import Dictation
 from gdictate_core.chrome import chrome_profile_dir, is_browser_configured
 from gdictate_core.file_jobs import FileTranscriptionResult, FileTranscriptionSegment, export_transcription
 from gdictate_core.install_assets import install_user_assets, user_install_plan
+from gdictate_core.hotkeys import _binding_groups, _is_pressed
 from gdictate_core.models import State, TranscriptResult
 from gdictate_core.paste import _linux_combo_keycodes
 from gdictate_core.platforms import chrome_candidates
@@ -145,6 +146,8 @@ class SettingsTests(unittest.TestCase):
         fields = {field.path: field for group in settings_schema() for field in group.fields}
 
         self.assertEqual(fields["engine.name"].options, ["chrome", "chatgpt", "openai"])
+        self.assertEqual(AppSettings().bind.mic_hold, "F8")
+        self.assertEqual(AppSettings().bind.speakers_hold, "F9")
         self.assertEqual(fields["transcriber.endpoint"].default, "http://127.0.0.1:37182/v1/audio/transcriptions")
         self.assertIn("edge", fields["chrome.channel"].options)
         self.assertTrue(chrome_candidates("chromium"))
@@ -218,6 +221,33 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("evdev", requirements)
         self.assertNotIn("dbus-python", requirements)
         self.assertNotIn("PyQt6", requirements)
+
+
+class HotkeyParsingTests(unittest.TestCase):
+    class Codes:
+        KEY_LEFTCTRL = 29
+        KEY_RIGHTCTRL = 97
+        KEY_LEFTALT = 56
+        KEY_RIGHTALT = 100
+        KEY_LEFTMETA = 125
+        KEY_RIGHTMETA = 126
+        KEY_LEFTSHIFT = 42
+        KEY_RIGHTSHIFT = 54
+        KEY_F8 = 66
+        KEY_F9 = 67
+
+    def test_hold_bindings_are_explicit_and_single_device_safe(self) -> None:
+        mic = _binding_groups("F8", self.Codes)
+        speaker = _binding_groups("ALT+F9", self.Codes)
+
+        self.assertTrue(_is_pressed(mic, {self.Codes.KEY_F8}))
+        self.assertFalse(_is_pressed(mic, {self.Codes.KEY_F9}))
+        self.assertTrue(_is_pressed(speaker, {self.Codes.KEY_LEFTALT, self.Codes.KEY_F9}))
+        self.assertFalse(_is_pressed(speaker, {self.Codes.KEY_LEFTALT}))
+
+    def test_unknown_hold_key_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown evdev key"):
+            _binding_groups("ALT+NOT_A_KEY", self.Codes)
 
 
 class PasteTests(unittest.TestCase):

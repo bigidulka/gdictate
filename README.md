@@ -75,7 +75,7 @@ Chrome engine runs local HTTPS/WebSocket service and hidden `speech-proxy.html` 
 
 Linux notes:
 
-- Hold hotkeys on Wayland need access to input devices.
+- Hold hotkeys on Wayland need access to input devices. Defaults are dedicated `F8`/`F9`; do not use modifier-only chords such as `Alt+Left`, which desktop navigation and key-repeat can interfere with.
 - Add your user to the `input` group, log out, then log back in.
 - Paste uses clipboard plus a key-injection backend such as `ydotool` or `wtype`.
 - Speaker mode follows the current default PipeWire/Pulse speaker monitor.
@@ -129,8 +129,8 @@ Default controls:
 
 | Action | Default |
 |---|---|
-| Hold microphone channel | `Alt+Left` |
-| Hold speaker channel | `Alt+Right` |
+| Hold microphone channel | `F8` |
+| Hold speaker channel | `F9` |
 | Stop recording | release the held key |
 | Open app settings | tray menu or main window |
 | Disable popup | Settings -> Live -> Live popup |

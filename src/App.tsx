@@ -273,8 +273,8 @@ const defaults: AppSettings = {
   bind: {
     mode: "dual-hold",
     toggle: "CTRL+ALT",
-    mic_hold: "ALT+LEFT",
-    speakers_hold: "ALT+RIGHT",
+    mic_hold: "F8",
+    speakers_hold: "F9",
     linux_backend: "de-shortcut+evdev"
   },
   audio: {

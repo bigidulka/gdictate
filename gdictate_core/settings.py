@@ -25,8 +25,8 @@ class TranscriberSettings:
 class BindingSettings:
     mode: str = "dual-hold"
     toggle: str = "CTRL+ALT"
-    mic_hold: str = "ALT+LEFT"
-    speakers_hold: str = "ALT+RIGHT"
+    mic_hold: str = "F8"
+    speakers_hold: str = "F9"
     linux_backend: str = "de-shortcut+evdev"
 
 
