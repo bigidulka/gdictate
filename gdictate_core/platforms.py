@@ -294,7 +294,7 @@ def capability_report() -> CapabilityReport:
         microphone_routing="PipeWire/Pulse default source",
         speaker_routing="default sink monitor remapped to Chrome input" if has_pactl else "unavailable",
         global_hotkeys="DE shortcuts/CLI + evdev fallback" if has_evdev else "DE shortcuts/CLI only",
-        paste="wl-copy + Ghostty action/ydotool/wtype",
+        paste="wl-copy + ydotool/wtype",
         overlay="Tauri/Qt click-through popup; GNOME OSD requires extension",
         warnings=warnings,
     )
@@ -546,7 +546,7 @@ def diagnostics_report() -> DiagnosticsReport:
     gdictate_enabled = _user_unit_enabled(gdictate_unit) if gdictate_unit else "missing"
     input_group_ready = _group_ready("input")
     hotkey_backend = "daemon-integrated evdev hold + DE shortcut toggle"
-    paste_backend = "wl-copy + Ghostty action/"
+    paste_backend = "wl-copy + "
     paste_backend += "ydotool" if has_ydotool else "wtype" if has_wtype else "missing key injector"
     if has_ydotool:
         paste_backend += " (+ direct type)"

@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import shutil
 import sys
 
 
-LINUX_CLIPBOARD_TIMEOUT = 1.2
 LINUX_MODIFIER_TIMEOUT = 1.0
 LINUX_KEY_DELAY_MS = "20"
 
@@ -81,10 +79,6 @@ async def _paste_linux(text: str, mode: str, combo: str) -> bool:
     await _wait_linux_modifiers_released()
     await _release_linux_virtual_modifiers()
     await asyncio.sleep(0.08)
-
-    if mode == "auto" and await _ghostty_native_paste():
-        print("[PASTE] sent via Ghostty native action", file=sys.stderr, flush=True)
-        return True
 
     if combo == "shift-insert" and not await _copy_linux(text, primary=True):
         print("[WARN] primary clipboard unavailable; attempting regular clipboard paste", file=sys.stderr, flush=True)
@@ -160,155 +154,10 @@ async def _copy_linux(text: str, primary: bool = False) -> bool:
         print(f"[WARN] wl-copy {label} failed ({code})", file=sys.stderr, flush=True)
         return False
 
-    if not shutil.which("wl-paste"):
-        print(f"[PASTE] {label} set; wl-paste unavailable for verification", file=sys.stderr, flush=True)
-        return True
-
-    verified = await _wait_linux_clipboard_text(text, primary=primary)
-    if verified:
-        print(f"[PASTE] {label} verified", file=sys.stderr, flush=True)
-    else:
-        # wl-copy successfully accepted input. Verification is racy under
-        # Wayland because another clipboard client may own or inspect the
-        # selection before wl-paste reads it. Never drop a recognized phrase
-        # merely because this optional read-back lost that race.
-        print(f"[WARN] {label} read-back failed; attempting paste", file=sys.stderr, flush=True)
+    # wl-copy accepted input. Read-back can block behind a stale Wayland
+    # owner, so insertion continues without probing clipboard contents.
+    print(f"[PASTE] {label} set", file=sys.stderr, flush=True)
     return True
-
-
-async def _ghostty_native_paste() -> bool:
-    """Use Ghostty's paste action only when its window owns focused surface.
-
-    AT-SPI gives us the active top-level process without creating or focusing a
-    window. If that process is Ghostty and it exposes exactly one D-Bus window,
-    its native action avoids layout-sensitive synthetic key delivery. Any
-    uncertainty falls through to the generic Wayland injector.
-    """
-    if os.name != "posix" or not shutil.which("gdbus"):
-        return False
-    try:
-        focused_pids = await asyncio.to_thread(_focused_accessible_process_ids)
-        owner_pid = await _gdbus_process_id("com.mitchellh.ghostty")
-        if not owner_pid or owner_pid not in focused_pids:
-            return False
-        paths = await _ghostty_window_paths()
-        if len(paths) != 1:
-            return False
-        proc = await asyncio.create_subprocess_exec(
-            "gdbus",
-            "call",
-            "--session",
-            "--dest",
-            "com.mitchellh.ghostty",
-            "--object-path",
-            paths[0],
-            "--method",
-            "org.gtk.Actions.Activate",
-            "paste",
-            "[]",
-            "{}",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=0.8)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return False
-        return proc.returncode == 0
-    except (OSError, RuntimeError, TimeoutError):
-        return False
-
-
-def _focused_accessible_process_ids() -> set[int]:
-    try:
-        import gi
-
-        gi.require_version("Atspi", "2.0")
-        from gi.repository import Atspi
-    except Exception:
-        return set()
-
-    pids: set[int] = set()
-    try:
-        desktop = Atspi.get_desktop(0)
-
-        def walk(obj, depth: int = 0) -> None:
-            if depth > 20:
-                return
-            try:
-                state = obj.get_state_set()
-                role = obj.get_role_name()
-                if state.contains(Atspi.StateType.FOCUSED) or (
-                    role in ("frame", "window") and state.contains(Atspi.StateType.ACTIVE)
-                ):
-                    pid = int(obj.get_process_id())
-                    if pid > 0:
-                        pids.add(pid)
-                for index in range(obj.get_child_count()):
-                    child = obj.get_child_at_index(index)
-                    if child:
-                        walk(child, depth + 1)
-            except Exception:
-                return
-
-        walk(desktop)
-    except Exception:
-        return set()
-    return pids
-
-
-async def _gdbus_process_id(bus_name: str) -> int | None:
-    proc = await asyncio.create_subprocess_exec(
-        "gdbus",
-        "call",
-        "--session",
-        "--dest",
-        "org.freedesktop.DBus",
-        "--object-path",
-        "/org/freedesktop/DBus",
-        "--method",
-        "org.freedesktop.DBus.GetConnectionUnixProcessID",
-        bus_name,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=0.5)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return None
-    if proc.returncode != 0:
-        return None
-    match = re.search(rb"\b(\d+)\b", stdout)
-    return int(match.group(1)) if match else None
-
-
-async def _ghostty_window_paths() -> list[str]:
-    proc = await asyncio.create_subprocess_exec(
-        "gdbus",
-        "introspect",
-        "--xml",
-        "--session",
-        "--dest",
-        "com.mitchellh.ghostty",
-        "--object-path",
-        "/com/mitchellh/ghostty/window",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=0.5)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return []
-    if proc.returncode != 0:
-        return []
-    names = re.findall(rb'<node name="([0-9]+)"', stdout)
-    return [f"/com/mitchellh/ghostty/window/{name.decode('ascii')}" for name in names]
 
 
 async def _reap_process(proc: asyncio.subprocess.Process) -> None:
@@ -316,36 +165,6 @@ async def _reap_process(proc: asyncio.subprocess.Process) -> None:
         await proc.wait()
     except Exception:
         pass
-
-
-async def _wait_linux_clipboard_text(expected: str, primary: bool = False) -> bool:
-    deadline = asyncio.get_running_loop().time() + LINUX_CLIPBOARD_TIMEOUT
-    last = ""
-    while asyncio.get_running_loop().time() < deadline:
-        args = ["wl-paste", "--no-newline"]
-        if primary:
-            args.append("--primary")
-        args += ["--type", "text/plain"]
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=0.35)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            await asyncio.sleep(0.04)
-            continue
-        if proc.returncode == 0:
-            last = stdout.decode("utf-8", errors="replace")
-            if last == expected:
-                return True
-        await asyncio.sleep(0.04)
-    if last:
-        print(f"[WARN] clipboard mismatch: expected {len(expected)} chars, got {len(last)}", file=sys.stderr, flush=True)
-    return False
 
 
 async def _wait_linux_modifiers_released() -> None:

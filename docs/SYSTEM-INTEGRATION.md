@@ -27,10 +27,10 @@ physical F8/F9 via evdev
   -> native PipeWire capture via pw-record
   -> chatgpt-transcribe-connect on loopback
   -> wl-clipboard Unicode selection
-  -> Ghostty native paste action when focused, otherwise ydotool Shift+Insert fallback
+  -> ydotool Shift+Insert fallback for layout-independent insertion
 ```
 
-Native pieces: PipeWire audio, Wayland Qt overlay, Wayland clipboard. Focused Ghostty uses its D-Bus `paste` action after an AT-SPI PID guard, avoiding synthetic key delivery. Other applications use physical `Shift+Insert` through `ydotool`; both regular and PRIMARY selections are published for terminal compatibility. GNOME does not expose a stable generic non-interactive text-injection protocol. RemoteDesktop portal input requires remote-control permission/session UI. `Shift+Insert` uses physical non-character keycodes and therefore works with both `us` and `ru` layouts; character-based `Ctrl+Shift+V` bindings can change with the active layout.
+Native pieces: PipeWire audio, Wayland Qt overlay, Wayland clipboard. Applications use physical `Shift+Insert` through `ydotool`; regular and PRIMARY selections are published for terminal compatibility, with PRIMARY publication best-effort and non-blocking. GNOME does not expose a stable generic non-interactive text-injection protocol. RemoteDesktop portal input requires remote-control permission/session UI. `Shift+Insert` uses physical non-character keycodes and therefore works with both `us` and `ru` layouts; character-based `Ctrl+Shift+V` bindings can change with the active layout.
 
 ## Privacy
 

@@ -490,14 +490,11 @@ class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
             paste_module._wait_linux_modifiers_released = original_modifiers
             asyncio.sleep = original_sleep  # type: ignore[assignment]
 
-    async def test_clipboard_readback_failure_still_pastes(self) -> None:
+    async def test_clipboard_setup_failure_still_pastes(self) -> None:
         calls: list[str] = []
 
         async def fake_copy(_text: str) -> bool:
             return True
-
-        async def fake_wait(_text: str) -> bool:
-            return False
 
         async def fake_release() -> None:
             return None
@@ -507,12 +504,10 @@ class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
             return True
 
         original_copy = paste_module._copy_linux
-        original_wait = paste_module._wait_linux_clipboard_text
         original_release = paste_module._release_linux_virtual_modifiers
         original_paste = paste_module._ydotool_paste
         original_modifiers = paste_module._wait_linux_modifiers_released
         paste_module._copy_linux = fake_copy
-        paste_module._wait_linux_clipboard_text = fake_wait
         paste_module._release_linux_virtual_modifiers = fake_release
         paste_module._ydotool_paste = fake_paste
         paste_module._wait_linux_modifiers_released = fake_release
@@ -521,7 +516,6 @@ class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls, ["ctrl-shift-v"])
         finally:
             paste_module._copy_linux = original_copy
-            paste_module._wait_linux_clipboard_text = original_wait
             paste_module._release_linux_virtual_modifiers = original_release
             paste_module._ydotool_paste = original_paste
             paste_module._wait_linux_modifiers_released = original_modifiers
