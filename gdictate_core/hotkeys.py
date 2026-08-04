@@ -76,23 +76,12 @@ async def run_dual_hold_evdev_actions(
         print(f"[ERR] Invalid hold binding: {exc}", file=sys.stderr, flush=True)
         return False
 
-    devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-    keyboards = _hold_keyboards(devices, list(bindings.values()), ecodes)
-    if not keyboards:
-        print(
-            "[WARN] No compatible keyboards found via evdev. Add user to input group and re-login for global hotkey.",
-            file=sys.stderr,
-            flush=True,
-        )
-        return False
-
-    device_pressed: dict[str, set[int]] = {device.path: set() for device in keyboards}
+    device_pressed: dict[str, set[int]] = {}
     desired_source: Optional[str] = None
     active_source: Optional[str] = None
     pending_start: Optional[asyncio.Task] = None
+    reconcile_tasks: set[asyncio.Task] = set()
     lock = asyncio.Lock()
-
-    print(f"[BIND] Hold {mic_hold} = mic; hold {speakers_hold} = speakers ({len(keyboards)} keyboard device(s))\n", flush=True)
 
     def target_source() -> Optional[str]:
         # A hold chord must be complete on one physical keyboard. Do not combine
@@ -115,6 +104,8 @@ async def run_dual_hold_evdev_actions(
                 active_source = source
         except asyncio.CancelledError:
             return
+        except Exception as exc:
+            print(f"[ERR] hotkey start failed: {exc}", file=sys.stderr, flush=True)
 
     async def reconcile(source: Optional[str]) -> None:
         nonlocal active_source, pending_start
@@ -124,7 +115,10 @@ async def run_dual_hold_evdev_actions(
             if source == active_source:
                 return
             if active_source:
-                await on_stop()
+                try:
+                    await on_stop()
+                except Exception as exc:
+                    print(f"[ERR] hotkey stop failed: {exc}", file=sys.stderr, flush=True)
                 active_source = None
             if pending_start and not pending_start.done():
                 pending_start.cancel()
@@ -132,13 +126,20 @@ async def run_dual_hold_evdev_actions(
             if source:
                 pending_start = asyncio.create_task(delayed_start(source))
 
+    def schedule_reconcile(source: Optional[str]) -> None:
+        task = asyncio.create_task(reconcile(source))
+        reconcile_tasks.add(task)
+        task.add_done_callback(reconcile_tasks.discard)
+
     async def read(device) -> None:
         nonlocal desired_source
+        path = device.path
+        device_pressed[path] = set()
         try:
             async for event in device.async_read_loop():
                 if event.type != ecodes.EV_KEY or event.value == 2:
                     continue
-                pressed = device_pressed[device.path]
+                pressed = device_pressed[path]
                 if event.value == 1:
                     pressed.add(event.code)
                 elif event.value == 0:
@@ -146,19 +147,63 @@ async def run_dual_hold_evdev_actions(
                 target = target_source()
                 if target != desired_source:
                     desired_source = target
-                    asyncio.create_task(reconcile(target))
-        except OSError:
+                    schedule_reconcile(target)
+        except (OSError, asyncio.CancelledError):
             pass
         finally:
-            device_pressed.pop(device.path, None)
+            try:
+                device.close()
+            except OSError:
+                pass
+            device_pressed.pop(path, None)
             target = target_source()
             if target != desired_source:
                 desired_source = target
-                asyncio.create_task(reconcile(target))
+                schedule_reconcile(target)
 
-    tasks = [asyncio.create_task(read(keyboard)) for keyboard in keyboards]
-    await asyncio.gather(*tasks)
-    return True
+    tasks: dict[str, asyncio.Task] = {}
+    first_scan = True
+    try:
+        while True:
+            devices = []
+            for path in evdev.list_devices():
+                if path in tasks:
+                    continue
+                try:
+                    devices.append(evdev.InputDevice(path))
+                except OSError:
+                    continue
+            keyboards = _hold_keyboards(devices, list(bindings.values()), ecodes)
+            for device in devices:
+                if device not in keyboards:
+                    device.close()
+            for keyboard in keyboards:
+                tasks[keyboard.path] = asyncio.create_task(read(keyboard))
+                print(f"[BIND] listening {keyboard.path}: {keyboard.name}", flush=True)
+            for path, task in list(tasks.items()):
+                if task.done():
+                    tasks.pop(path, None)
+                    try:
+                        task.result()
+                    except Exception:
+                        pass
+            if first_scan:
+                first_scan = False
+                if not tasks:
+                    print(
+                        "[WARN] No compatible keyboards found via evdev. Add user to input group and re-login for global hotkey.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            await asyncio.sleep(1.0)
+    finally:
+        if pending_start and not pending_start.done():
+            pending_start.cancel()
+        for task in tasks.values():
+            task.cancel()
+        for task in reconcile_tasks:
+            task.cancel()
+        await asyncio.gather(*tasks.values(), *reconcile_tasks, return_exceptions=True)
 
 
 async def run_evdev(dictation: Dictation, key_combo: str) -> bool:

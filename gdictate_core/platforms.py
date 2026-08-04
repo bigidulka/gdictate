@@ -226,12 +226,16 @@ def ensure_ydotool_service() -> None:
         return
 
 
-def check_dependencies(paste_mode: str = "auto") -> None:
+def check_dependencies(paste_mode: str = "auto", engine: str = "chrome") -> None:
     missing = []
-    try:
-        find_chrome()
-    except FileNotFoundError:
-        missing.append(("Chrome/Chromium/Edge", pkg_hint("chromium")))
+    if engine == "chrome":
+        try:
+            find_chrome()
+        except FileNotFoundError:
+            missing.append(("Chrome/Chromium/Edge", pkg_hint("chromium")))
+
+    if os.name != "nt" and engine in ("chatgpt", "openai") and not shutil.which("pw-record"):
+        missing.append(("PipeWire tools", pkg_hint("pipewire")))
 
     if os.name != "nt" and paste_mode != "none":
         if not shutil.which("wl-copy"):
@@ -290,7 +294,7 @@ def capability_report() -> CapabilityReport:
         microphone_routing="PipeWire/Pulse default source",
         speaker_routing="default sink monitor remapped to Chrome input" if has_pactl else "unavailable",
         global_hotkeys="DE shortcuts/CLI + evdev fallback" if has_evdev else "DE shortcuts/CLI only",
-        paste="wl-copy + ydotool/wtype",
+        paste="wl-copy + Ghostty action/ydotool/wtype",
         overlay="Tauri/Qt click-through popup; GNOME OSD requires extension",
         warnings=warnings,
     )
@@ -539,12 +543,10 @@ def diagnostics_report() -> DiagnosticsReport:
     has_wtype = shutil.which("wtype") is not None
     ydotool_unit, ydotool_state = _user_unit_state("ydotool.service", "ydotoold.service")
     gdictate_unit, gdictate_state = _user_unit_state("gdictate-daemon.service")
-    gdictate_hotkeys_unit, gdictate_hotkeys_state = _user_unit_state("gdictate-hotkeys.service")
     gdictate_enabled = _user_unit_enabled(gdictate_unit) if gdictate_unit else "missing"
-    gdictate_hotkeys_enabled = _user_unit_enabled(gdictate_hotkeys_unit) if gdictate_hotkeys_unit else "missing"
     input_group_ready = _group_ready("input")
-    hotkey_backend = "evdev hold + DE shortcut toggle"
-    paste_backend = "wl-copy + "
+    hotkey_backend = "daemon-integrated evdev hold + DE shortcut toggle"
+    paste_backend = "wl-copy + Ghostty action/"
     paste_backend += "ydotool" if has_ydotool else "wtype" if has_wtype else "missing key injector"
     if has_ydotool:
         paste_backend += " (+ direct type)"
@@ -676,7 +678,7 @@ def diagnostics_report() -> DiagnosticsReport:
             "Install user startup assets",
             "available",
             "python gdictate.py --install-user-assets",
-            "Write systemd user services, desktop launcher, and autostart entry for the current user.",
+            "Write the systemd daemon service and desktop launcher for the current user.",
         )
     )
     if gdictate_unit:
@@ -686,7 +688,7 @@ def diagnostics_report() -> DiagnosticsReport:
                     "enable_daemon_service",
                     "Enable daemon service",
                     f"{gdictate_state}/{gdictate_enabled}",
-                    "systemctl --user daemon-reload && systemctl --user enable --now gdictate-daemon.service",
+                    "systemctl --user daemon-reload && systemctl --user enable gdictate-daemon.service && systemctl --user restart gdictate-daemon.service",
                     "Start the Python daemon at login and now for this user.",
                 )
             )
@@ -698,28 +700,6 @@ def diagnostics_report() -> DiagnosticsReport:
                     "active/enabled",
                     "systemctl --user disable --now gdictate-daemon.service",
                     "Stop auto-starting the Python daemon for this user.",
-                )
-            )
-
-    if gdictate_hotkeys_unit:
-        if gdictate_hotkeys_state != "active" or gdictate_hotkeys_enabled != "enabled":
-            system_actions.append(
-                _action(
-                    "enable_hotkeys_service",
-                    "Enable hotkeys service",
-                    f"{gdictate_hotkeys_state}/{gdictate_hotkeys_enabled}",
-                    "systemctl --user daemon-reload && systemctl --user enable --now gdictate-hotkeys.service",
-                    "Start the evdev hold hotkey listener at login and now for this user.",
-                )
-            )
-        else:
-            system_actions.append(
-                _action(
-                    "disable_hotkeys_service",
-                    "Disable hotkeys service",
-                    "active/enabled",
-                    "systemctl --user disable --now gdictate-hotkeys.service",
-                    "Stop auto-starting the evdev hold hotkey listener for this user.",
                 )
             )
 
@@ -785,28 +765,21 @@ def apply_system_action(action_id: str) -> SystemActionResult:
             message = reload_result.stderr.strip() or reload_result.stdout.strip() or "systemctl daemon-reload failed"
             return SystemActionResult(False, action.id, "failed", message, action.command)
         result = subprocess.run(
-            ["systemctl", "--user", "enable", "--now", "gdictate-daemon.service"],
+            ["systemctl", "--user", "enable", "gdictate-daemon.service"],
             capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            return SystemActionResult(True, action.id, "done", "gdictate-daemon.service enabled and started", action.command)
+            restart = subprocess.run(
+                ["systemctl", "--user", "restart", "gdictate-daemon.service"],
+                capture_output=True,
+                text=True,
+            )
+            if restart.returncode != 0:
+                message = restart.stderr.strip() or restart.stdout.strip() or "failed to restart gdictate-daemon.service"
+                return SystemActionResult(False, action.id, "failed", message, action.command)
+            return SystemActionResult(True, action.id, "done", "gdictate-daemon.service enabled and restarted", action.command)
         message = result.stderr.strip() or result.stdout.strip() or "failed to enable gdictate-daemon.service"
-        return SystemActionResult(False, action.id, "failed", message, action.command)
-
-    if action.id == "enable_hotkeys_service":
-        reload_result = subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True)
-        if reload_result.returncode != 0:
-            message = reload_result.stderr.strip() or reload_result.stdout.strip() or "systemctl daemon-reload failed"
-            return SystemActionResult(False, action.id, "failed", message, action.command)
-        result = subprocess.run(
-            ["systemctl", "--user", "enable", "--now", "gdictate-hotkeys.service"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return SystemActionResult(True, action.id, "done", "gdictate-hotkeys.service enabled and started", action.command)
-        message = result.stderr.strip() or result.stdout.strip() or "failed to enable gdictate-hotkeys.service"
         return SystemActionResult(False, action.id, "failed", message, action.command)
 
     if action.id == "disable_daemon_service":
@@ -818,17 +791,6 @@ def apply_system_action(action_id: str) -> SystemActionResult:
         if result.returncode == 0:
             return SystemActionResult(True, action.id, "done", "gdictate-daemon.service disabled and stopped", action.command)
         message = result.stderr.strip() or result.stdout.strip() or "failed to disable gdictate-daemon.service"
-        return SystemActionResult(False, action.id, "failed", message, action.command)
-
-    if action.id == "disable_hotkeys_service":
-        result = subprocess.run(
-            ["systemctl", "--user", "disable", "--now", "gdictate-hotkeys.service"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return SystemActionResult(True, action.id, "done", "gdictate-hotkeys.service disabled and stopped", action.command)
-        message = result.stderr.strip() or result.stdout.strip() or "failed to disable gdictate-hotkeys.service"
         return SystemActionResult(False, action.id, "failed", message, action.command)
 
     return SystemActionResult(False, action.id, "blocked", "automatic execution is not allowed for this action", action.command)

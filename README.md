@@ -192,7 +192,7 @@ Live popup settings apply immediately. Daemon-bound settings are saved and appli
 .venv/bin/python gdictate.py --paste auto
 .venv/bin/python gdictate.py --paste type --save-settings
 .venv/bin/python gdictate.py --paste copy --save-settings
-.venv/bin/python gdictate.py --linux-paste-key ctrl-v
+.venv/bin/python gdictate.py --linux-paste-key shift-insert
 .venv/bin/python gdictate.py --chrome-channel chromium
 .venv/bin/python gdictate.py --chrome-profile-dir ./tmp/chrome-profile
 .venv/bin/python gdictate.py --no-chrome-hidden
@@ -205,11 +205,10 @@ GDICTATE_TRANSCRIBER_API_KEY=... .venv/bin/python gdictate.py --engine openai --
 .venv/bin/python gdictate.py --reset-settings
 ```
 
-Daemon IPC:
+Daemon IPC (the daemon includes the Linux evdev hold listener):
 
 ```bash
 .venv/bin/python gdictate.py --daemon --no-ui
-.venv/bin/python gdictate.py --daemon-hotkeys
 .venv/bin/python gdictate.py --toggle mic
 .venv/bin/python gdictate.py --toggle speakers
 ```
@@ -247,7 +246,7 @@ File transcription:
 
 ## IPC API
 
-The daemon listens on `127.0.0.1:9877`.
+The daemon listens on `127.0.0.1:9877`. Every HTTP and WebSocket request requires the per-user bearer token at `~/.config/gdictate/control-token` (mode `0600`). The bundled CLI and Tauri UI attach it automatically; do not expose it in logs or command history. Privacy-safe IPC schema is version `2` (`ipc_version: 2`): transcript bodies stream only in live `transcript.*` events and are never returned by status/stop or retained in event history.
 
 | Endpoint | Role |
 |---|---|

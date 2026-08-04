@@ -32,7 +32,7 @@
 
 **Файл:** `gdictate.py` → `Dictation._paste()`
 
-Сейчас: `wl-copy` + `ydotool key` (Ctrl+Shift+V). Только Wayland.
+Сейчас: Wayland clipboard + Ghostty native paste when focused, otherwise `ydotool` Shift+Insert. Только Wayland.
 
 ### macOS
 - [ ] Clipboard: `pbcopy` (`subprocess: echo text | pbcopy`)

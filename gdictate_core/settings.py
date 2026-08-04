@@ -33,7 +33,7 @@ class BindingSettings:
 @dataclass
 class AudioSettings:
     source: str = "mic"
-    restore_default_after_start: bool = True
+    restore_default_after_start: bool = False
     linux_router: str = "pipewire-pulse"
     windows_speaker_input: str = "auto"
 
@@ -42,7 +42,7 @@ class AudioSettings:
 class PasteSettings:
     mode: str = "auto"
     live: bool = True
-    linux_terminal_combo: str = "ctrl-shift-v"
+    linux_terminal_combo: str = "shift-insert"
     windows_combo: str = "ctrl-v"
 
 
@@ -160,7 +160,7 @@ def settings_schema() -> list[SettingsGroup]:
             [
                 _field(defaults, "paste.mode", "Paste mode", "select", ["auto", "ydotool", "wtype", "type", "copy", "none"]),
                 _field(defaults, "paste.live", "Paste while dictating", "bool"),
-                _field(defaults, "paste.linux_terminal_combo", "Linux terminal combo", "select", ["ctrl-shift-v", "ctrl-v"]),
+                _field(defaults, "paste.linux_terminal_combo", "Linux terminal combo", "select", ["shift-insert", "ctrl-shift-v", "ctrl-v"]),
                 _field(defaults, "paste.windows_combo", "Windows paste combo", "select", ["ctrl-v"]),
             ],
         ),

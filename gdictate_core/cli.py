@@ -5,6 +5,8 @@ import asyncio
 import json
 import os
 import signal
+import shutil
+import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -18,7 +20,7 @@ from .desktop import ensure_kwin_rule
 from .file_jobs import FileTranscriptionOptions, pipeline_report, transcribe_file
 from .hotkeys import run_dual_hold_evdev, run_dual_hold_evdev_actions, run_evdev, run_stdin_toggle
 from .install_assets import install_user_assets, user_install_plan
-from .ipc import ControlServer, get_control, get_status, post_control
+from .ipc import ControlServer, control_token, get_control, get_status, post_control
 from .platforms import apply_system_action, capability_report, check_dependencies, diagnostics_report, live_report
 from .preflight import preflight_report
 from .settings import AppSettings, default_settings, load_settings, reset_settings, save_settings, settings_schema, settings_snapshot
@@ -36,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speakers-hold", default=None, help="Hold hotkey for speaker channel, e.g. F9")
     parser.add_argument("--paste", default=None, choices=["auto", "ydotool", "wtype", "type", "copy", "none"])
     parser.add_argument("--live-paste", default=None, action=argparse.BooleanOptionalAction, help="Paste final chunks while dictating")
-    parser.add_argument("--linux-paste-key", default=None, choices=["ctrl-v", "ctrl-shift-v"], help="Linux paste shortcut sent by ydotool/wtype")
+    parser.add_argument("--linux-paste-key", default=None, choices=["shift-insert", "ctrl-v", "ctrl-shift-v"], help="Linux paste shortcut sent by ydotool/wtype")
     parser.add_argument("--no-paste", action="store_const", const="none", dest="paste")
     parser.add_argument("--source", default=None, choices=["mic", "speakers", "both"])
     parser.add_argument("--linux-router", default=None, choices=["pipewire-pulse", "pulse", "manual"])
@@ -91,13 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export format for --transcribe-file; repeatable",
     )
     parser.add_argument("--daemon", action="store_true", help="Run headless IPC daemon")
-    parser.add_argument("--daemon-hotkeys", action="store_true", help="Run Linux evdev hold listener that controls IPC daemon")
+    parser.add_argument("--daemon-hotkeys", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--parent-pid", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--status", action="store_true", help="Print IPC daemon status")
     parser.add_argument("--start", choices=["mic", "speakers", "both"], help="Start daemon recording channel")
     parser.add_argument("--stop", action="store_true", help="Stop daemon recording")
     parser.add_argument("--toggle", choices=["mic", "speakers", "both"], nargs="?", const="mic", help="Toggle daemon recording")
     parser.add_argument("--shutdown", action="store_true", help="Shutdown IPC daemon")
+    parser.add_argument("--print-control-token", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -168,6 +171,40 @@ def make_dictation(settings: AppSettings, args: argparse.Namespace) -> Dictation
         transcriber_timeout_seconds=settings.transcriber.timeout_seconds,
         transcriber_api_key_env=settings.transcriber.api_key_env,
     )
+
+
+def migrate_legacy_hotkey_service(home: Path | None = None) -> None:
+    if os.name != "posix" or not shutil.which("systemctl"):
+        return
+    unit = (home or Path.home()) / ".config" / "systemd" / "user" / "gdictate-hotkeys.service"
+    listed = subprocess.run(
+        ["systemctl", "--user", "list-unit-files", "gdictate-hotkeys.service"],
+        capture_output=True,
+        text=True,
+    )
+    if "gdictate-hotkeys.service" not in listed.stdout and not unit.exists():
+        return
+    subprocess.run(
+        ["systemctl", "--user", "disable", "--now", "gdictate-hotkeys.service"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if unit.exists():
+        try:
+            unit.unlink()
+        except OSError as exc:
+            print(
+                f"[MIGRATE] legacy gdictate-hotkeys.service disabled; remove unit during install: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
+    subprocess.run(
+        ["systemctl", "--user", "daemon-reload"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    print("[MIGRATE] removed legacy gdictate-hotkeys.service", flush=True)
 
 
 def make_overlay(settings: AppSettings):
@@ -271,8 +308,10 @@ async def main(args, overlay=None, tray=None) -> None:
 async def daemon_main(args, overlay=None, tray=None) -> None:
     settings = effective_settings(args)
     ensure_kwin_rule()
+    migrate_legacy_hotkey_service()
     server = None
     dictation = None
+    hotkeys_task = None
 
     try:
         need_setup = settings.engine.name == "chrome" and (settings.chrome.setup_required or not is_browser_configured(settings.chrome.profile_dir))
@@ -302,6 +341,32 @@ async def daemon_main(args, overlay=None, tray=None) -> None:
         await dictation.init(setup_mode=settings.chrome.setup_required)
         await server.start()
 
+        if os.name == "posix" and settings.bind.mode == "dual-hold" and settings.bind.linux_backend in ("de-shortcut+evdev", "evdev"):
+            async def on_hotkey_start(source: str) -> None:
+                await dictation.start_recording(source)
+
+            async def on_hotkey_stop() -> None:
+                await dictation.stop_recording()
+
+            async def hotkeys_loop() -> None:
+                while True:
+                    try:
+                        ok = await run_dual_hold_evdev_actions(
+                            on_hotkey_start,
+                            on_hotkey_stop,
+                            settings.bind.mic_hold,
+                            settings.bind.speakers_hold,
+                        )
+                        if not ok:
+                            return
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        print(f"[ERR] evdev hotkey listener failed: {exc}", file=sys.stderr, flush=True)
+                        await asyncio.sleep(2.0)
+
+            hotkeys_task = asyncio.create_task(hotkeys_loop())
+
         if tray:
             def on_tray_toggle():
                 asyncio.ensure_future(dictation.toggle())
@@ -319,6 +384,9 @@ async def daemon_main(args, overlay=None, tray=None) -> None:
     except asyncio.CancelledError:
         pass
     finally:
+        if hotkeys_task:
+            hotkeys_task.cancel()
+            await asyncio.gather(hotkeys_task, return_exceptions=True)
         if server:
             await server.close()
         if dictation:
@@ -332,7 +400,8 @@ async def control_command(args) -> None:
         elif args.start:
             result = await post_control("/start", {"source": args.start})
         elif args.stop:
-            result = await post_control("/stop")
+            settings = effective_settings(args)
+            result = await post_control("/stop", timeout_seconds=settings.transcriber.timeout_seconds + 15)
         elif args.toggle:
             result = await post_control("/toggle", {"source": args.toggle})
         elif args.shutdown:
@@ -366,38 +435,12 @@ async def control_command(args) -> None:
     print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
 
 
-async def daemon_hotkeys_main(args) -> None:
-    settings = effective_settings(args)
-    deadline = asyncio.get_running_loop().time() + 60
-    while True:
-        try:
-            await get_status()
-            break
-        except (aiohttp.ClientError, RuntimeError, TimeoutError, ConnectionError):
-            if asyncio.get_running_loop().time() >= deadline:
-                raise
-            await asyncio.sleep(1)
-
-    if args.parent_pid and os.name == "posix":
-        async def stop_with_parent() -> None:
-            parent = Path(f"/proc/{args.parent_pid}")
-            while parent.exists():
-                await asyncio.sleep(1)
-            os._exit(0)
-
-        asyncio.create_task(stop_with_parent())
-
-    async def on_start(source: str) -> None:
-        await post_control("/start", {"source": source})
-
-    async def on_stop() -> None:
-        await post_control("/stop")
-
-    if settings.bind.mode != "dual-hold":
-        print(f"[WARN] daemon hotkeys use dual-hold; current mode is {settings.bind.mode}", file=sys.stderr, flush=True)
-    ok = await run_dual_hold_evdev_actions(on_start, on_stop, settings.bind.mic_hold, settings.bind.speakers_hold)
-    if not ok:
-        sys.exit(2)
+async def daemon_hotkeys_main(_args) -> None:
+    print(
+        "[MIGRATE] standalone hotkey listener retired; daemon owns evdev hotkeys",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def run() -> None:
@@ -405,6 +448,9 @@ def run() -> None:
     args = parser.parse_args()
     settings = effective_settings(args)
 
+    if args.print_control_token:
+        print(control_token(), end="", flush=True)
+        return
     if args.capabilities:
         print(json.dumps(asdict(capability_report()), ensure_ascii=False, indent=2))
         return
@@ -475,24 +521,10 @@ def run() -> None:
         asyncio.run(control_command(args))
         return
 
-    check_dependencies(settings.paste.mode)
+    check_dependencies(settings.paste.mode, settings.engine.name)
 
-    if not args.no_ui:
-        try:
-            from overlay import DictationTray, OverlayPopup
-            from PyQt6.QtWidgets import QApplication
-            import qasync
-        except ImportError:
-            asyncio.run(daemon_main(args) if args.daemon else main(args))
-            return
-
-        app = QApplication(sys.argv)
-        overlay = OverlayPopup()
-        tray = DictationTray()
-        loop = qasync.QEventLoop(app)
-        asyncio.set_event_loop(loop)
-        with loop:
-            loop.run_until_complete(daemon_main(args, overlay, tray) if args.daemon else main(args, overlay, tray))
-    else:
-        overlay = make_overlay(settings)
-        asyncio.run(daemon_main(args, overlay) if args.daemon else main(args, overlay))
+    # OverlayPopup owns a separate Qt child process, so the daemon need not
+    # import the optional tray implementation or run a second Qt event loop.
+    # Importing the removed DictationTray used to disable the overlay silently.
+    overlay = None if args.no_ui else make_overlay(settings)
+    asyncio.run(daemon_main(args, overlay) if args.daemon else main(args, overlay))

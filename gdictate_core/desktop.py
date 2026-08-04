@@ -10,7 +10,8 @@ KWIN_RULE_DESCRIPTION = "gdictate-hide-chrome"
 
 
 def ensure_kwin_rule() -> None:
-    if os.name == "nt":
+    desktop = (os.environ.get("XDG_CURRENT_DESKTOP") or "").lower()
+    if os.name == "nt" or ("kde" not in desktop and "plasma" not in desktop):
         return
     if not KWIN_RULES_FILE.exists() and not shutil.which("qdbus6"):
         return

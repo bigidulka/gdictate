@@ -96,6 +96,7 @@ type OverlayStatus = {
 type DaemonStatus = {
   ok: boolean;
   version?: string;
+  ipc_version?: number;
   state: string;
   language?: string;
   engine?: string;
@@ -104,15 +105,17 @@ type DaemonStatus = {
   windows_speaker_input?: string;
   active_source?: string;
   paste_mode?: string;
-  text?: string;
+  text_length?: number;
 };
 
 type DaemonEvent = {
+  ipc_version?: number;
   type: string;
   state?: string;
   active_source?: string;
   channel?: string;
   text?: string;
+  text_length?: number;
   confidence?: number;
   level?: number;
   job?: FileJobStatus;
@@ -279,14 +282,14 @@ const defaults: AppSettings = {
   },
   audio: {
     source: "mic",
-    restore_default_after_start: true,
+    restore_default_after_start: false,
     linux_router: "pipewire-pulse",
     windows_speaker_input: "auto"
   },
   paste: {
     mode: "auto",
     live: true,
-    linux_terminal_combo: "ctrl-shift-v",
+    linux_terminal_combo: "shift-insert",
     windows_combo: "ctrl-v"
   },
   chrome: {
@@ -523,8 +526,6 @@ export function App() {
   const [liveText, setLiveText] = useState("");
   const [audioLevels, setAudioLevels] = useState<number[]>(Array(13).fill(0));
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
-  const [finalText, setFinalText] = useState<string[]>([]);
-  const [events, setEvents] = useState<DaemonEvent[]>([]);
   const [liveReport, setLiveReport] = useState<LiveBackendReport>(fallbackLiveReport);
   const [overlayStatus, setOverlayStatus] = useState<OverlayStatus>(fallbackOverlayStatus);
   const [shortcutReport, setShortcutReport] = useState<ShortcutReport | null>(null);
@@ -564,15 +565,19 @@ export function App() {
     let socket: WebSocket | null = null;
     let retry: number | null = null;
 
-    const connect = () => {
+    const connect = async () => {
       if (closed) {
         return;
       }
       try {
-        socket = new WebSocket("ws://127.0.0.1:9877/events");
+        const token = await call<string>("daemon_control_token", undefined, "");
+        if (!token) {
+          throw new Error("control token unavailable");
+        }
+        socket = new WebSocket("ws://127.0.0.1:9877/events", ["gdictate", token]);
       } catch {
         setEventState("offline");
-        retry = window.setTimeout(connect, 2000);
+        retry = window.setTimeout(() => void connect(), 2000);
         return;
       }
       socket.onopen = () => setEventState("live");
@@ -586,7 +591,7 @@ export function App() {
       socket.onclose = () => {
         setEventState("offline");
         if (!closed) {
-          retry = window.setTimeout(connect, 2000);
+          retry = window.setTimeout(() => void connect(), 2000);
         }
       };
       socket.onerror = () => {
@@ -594,7 +599,7 @@ export function App() {
       };
     };
 
-    connect();
+    void connect();
 
     return () => {
       closed = true;
@@ -833,9 +838,10 @@ export function App() {
   async function startHotkeys() {
     const hotkeys = await call<NativeHotkeyReport>("native_hotkeys_reload", undefined, fallbackNativeHotkeys);
     setNativeHotkeys(hotkeys);
-    const needsEvdev = isLinux && hotkeys.registered.length === 0 && hotkeys.warnings.some((item) => item.toLowerCase().includes("wayland"));
-    if (needsEvdev) {
-      await daemonCommand("evdev_hotkeys_spawn");
+    const usesDaemonEvdev = isLinux && hotkeys.warnings.some((item) => item.toLowerCase().includes("integrated into the python daemon"));
+    if (usesDaemonEvdev) {
+      await daemonCommand("daemon_spawn");
+      setStatus("evdev hotkeys active in daemon");
       return;
     }
     setStatus(`native hotkeys: ${hotkeys.registered.length}`);
@@ -938,7 +944,6 @@ export function App() {
   }
 
   function applyDaemonEvent(event: DaemonEvent) {
-    setEvents((current) => [event, ...current].slice(0, 20));
     if (event.type === "file.job" && event.job) {
       mergeFileJob(event.job);
       setActiveFileJob(event.job);
@@ -964,14 +969,10 @@ export function App() {
     if (event.type === "transcript.interim") {
       setLiveText(event.text || "");
     }
-    if (event.type === "transcript.final" && event.text) {
+    if (event.type === "transcript.final") {
       setLiveText("");
-      setFinalText((current) => [event.text || "", ...current].slice(0, 8));
     }
     if (event.type === "recording.stopped") {
-      if (event.text) {
-        setFinalText((current) => [event.text || "", ...current].slice(0, 8));
-      }
       setLiveText("");
       setRecordingStartedAt(null);
       setAudioLevels(Array(13).fill(0));
@@ -1053,7 +1054,7 @@ export function App() {
                   <span>{activeTab?.[2]}</span>
                   <strong>{daemon.active_source || settings.audio.source}</strong>
                 </div>
-                <p className={liveText ? "liveText active" : "liveText"}>{liveText || finalText[0] || "Готов"}</p>
+                <p className={liveText ? "liveText active" : "liveText"}>{liveText || "Готов"}</p>
               </section>
 
               <details className="inlineFold">
@@ -1214,7 +1215,7 @@ export function App() {
                   </Field>
                   {isLinux && (
                     <Field label="Вставка">
-                      <Select value={settings.paste.linux_terminal_combo} options={["ctrl-shift-v", "ctrl-v"]} onChange={(linux_terminal_combo) => patch({ paste: { ...settings.paste, linux_terminal_combo } })} />
+                      <Select value={settings.paste.linux_terminal_combo} options={["shift-insert", "ctrl-shift-v", "ctrl-v"]} onChange={(linux_terminal_combo) => patch({ paste: { ...settings.paste, linux_terminal_combo } })} />
                     </Field>
                   )}
                   {isWindows && (
@@ -1231,7 +1232,6 @@ export function App() {
                 <div className="commandRow compact">
                   <button onClick={startHotkeys}><Keyboard size={16} />Запустить</button>
                   <button onClick={reloadNativeHotkeys}><RotateCcw size={16} />Перезагрузить</button>
-                  {isLinux && <button onClick={() => daemonCommand("evdev_hotkeys_spawn")}><Keyboard size={16} />Evdev</button>}
                 </div>
                 <NoticeList title="Warnings" items={nativeHotkeys.warnings} />
               </div>

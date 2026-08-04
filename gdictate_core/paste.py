@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import sys
 
@@ -19,6 +20,7 @@ KEY_RIGHTALT = 100
 KEY_LEFTMETA = 125
 KEY_RIGHTMETA = 126
 KEY_V = 47
+KEY_INSERT = 110
 
 LINUX_MODIFIERS = {
     KEY_LEFTCTRL,
@@ -43,7 +45,7 @@ LINUX_MODIFIER_RELEASES = [
 ]
 
 
-async def paste_text(text: str, mode: str = "auto", linux_combo: str = "ctrl-shift-v", windows_combo: str = "ctrl-v") -> bool:
+async def paste_text(text: str, mode: str = "auto", linux_combo: str = "shift-insert", windows_combo: str = "ctrl-v") -> bool:
     if not text:
         return False
     mode = (mode or "auto").lower()
@@ -80,42 +82,63 @@ async def _paste_linux(text: str, mode: str, combo: str) -> bool:
     await _release_linux_virtual_modifiers()
     await asyncio.sleep(0.08)
 
+    if mode == "auto" and await _ghostty_native_paste():
+        print("[PASTE] sent via Ghostty native action", file=sys.stderr, flush=True)
+        return True
+
+    if combo == "shift-insert" and not await _copy_linux(text, primary=True):
+        print("[WARN] primary clipboard unavailable; attempting regular clipboard paste", file=sys.stderr, flush=True)
+
     if mode in ("auto", "ydotool") and shutil.which("ydotool"):
-        if await _ydotool_paste(combo):
-            print(f"[PASTE] sent {combo} via ydotool", file=sys.stderr, flush=True)
-            return True
+        try:
+            if await _ydotool_paste(combo):
+                print(f"[PASTE] sent {combo} via ydotool", file=sys.stderr, flush=True)
+                return True
+        except OSError as exc:
+            print(f"[WARN] ydotool paste failed: {exc}", file=sys.stderr, flush=True)
         if mode == "ydotool":
             return False
 
     if mode in ("auto", "wtype") and shutil.which("wtype"):
-        if await _wtype_paste(combo):
-            print(f"[PASTE] sent {combo} via wtype", file=sys.stderr, flush=True)
-            return True
+        try:
+            if await _wtype_paste(combo):
+                print(f"[PASTE] sent {combo} via wtype", file=sys.stderr, flush=True)
+                return True
+        except OSError as exc:
+            print(f"[WARN] wtype paste failed: {exc}", file=sys.stderr, flush=True)
 
     print("[WARN] paste key injector unavailable; text copied only", file=sys.stderr, flush=True)
     return False
 
 
 def _normalize_linux_combo(combo: str) -> str:
-    combo = (combo or "ctrl-v").lower().replace("+", "-")
+    combo = (combo or "shift-insert").lower().replace("+", "-")
+    if combo in ("shift-insert", "shift-ins"):
+        return "shift-insert"
     if combo in ("ctrl-shift-v", "control-shift-v"):
         return "ctrl-shift-v"
     return "ctrl-v"
 
 
-async def _copy_linux(text: str) -> bool:
+async def _copy_linux(text: str, primary: bool = False) -> bool:
     if not shutil.which("wl-copy"):
         print("[WARN] wl-copy not found; skip paste", file=sys.stderr, flush=True)
         return False
 
-    proc = await asyncio.create_subprocess_exec(
-        "wl-copy",
-        "--type",
-        "text/plain;charset=utf-8",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    args = ["wl-copy"]
+    if primary:
+        args.append("--primary")
+    args += ["--type", "text/plain;charset=utf-8"]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        print(f"[WARN] wl-copy failed to start: {exc}", file=sys.stderr, flush=True)
+        return False
     if not proc.stdin:
         return False
     proc.stdin.write(text.encode("utf-8"))
@@ -132,25 +155,160 @@ async def _copy_linux(text: str) -> bool:
         code = None
         asyncio.create_task(_reap_process(proc))
 
+    label = "primary clipboard" if primary else "clipboard"
     if code not in (None, 0):
-        print(f"[WARN] wl-copy failed ({code})", file=sys.stderr, flush=True)
+        print(f"[WARN] wl-copy {label} failed ({code})", file=sys.stderr, flush=True)
         return False
 
     if not shutil.which("wl-paste"):
-        await asyncio.sleep(0.15)
-        print("[PASTE] copied; wl-paste unavailable for verification", file=sys.stderr, flush=True)
+        print(f"[PASTE] {label} set; wl-paste unavailable for verification", file=sys.stderr, flush=True)
         return True
 
-    verified = await _wait_linux_clipboard_text(text)
+    verified = await _wait_linux_clipboard_text(text, primary=primary)
     if verified:
-        print("[PASTE] clipboard verified", file=sys.stderr, flush=True)
+        print(f"[PASTE] {label} verified", file=sys.stderr, flush=True)
     else:
         # wl-copy successfully accepted input. Verification is racy under
         # Wayland because another clipboard client may own or inspect the
         # selection before wl-paste reads it. Never drop a recognized phrase
         # merely because this optional read-back lost that race.
-        print("[WARN] clipboard read-back failed; attempting paste", file=sys.stderr, flush=True)
+        print(f"[WARN] {label} read-back failed; attempting paste", file=sys.stderr, flush=True)
     return True
+
+
+async def _ghostty_native_paste() -> bool:
+    """Use Ghostty's paste action only when its window owns focused surface.
+
+    AT-SPI gives us the active top-level process without creating or focusing a
+    window. If that process is Ghostty and it exposes exactly one D-Bus window,
+    its native action avoids layout-sensitive synthetic key delivery. Any
+    uncertainty falls through to the generic Wayland injector.
+    """
+    if os.name != "posix" or not shutil.which("gdbus"):
+        return False
+    try:
+        focused_pids = await asyncio.to_thread(_focused_accessible_process_ids)
+        owner_pid = await _gdbus_process_id("com.mitchellh.ghostty")
+        if not owner_pid or owner_pid not in focused_pids:
+            return False
+        paths = await _ghostty_window_paths()
+        if len(paths) != 1:
+            return False
+        proc = await asyncio.create_subprocess_exec(
+            "gdbus",
+            "call",
+            "--session",
+            "--dest",
+            "com.mitchellh.ghostty",
+            "--object-path",
+            paths[0],
+            "--method",
+            "org.gtk.Actions.Activate",
+            "paste",
+            "[]",
+            "{}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=0.8)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return False
+        return proc.returncode == 0
+    except (OSError, RuntimeError, TimeoutError):
+        return False
+
+
+def _focused_accessible_process_ids() -> set[int]:
+    try:
+        import gi
+
+        gi.require_version("Atspi", "2.0")
+        from gi.repository import Atspi
+    except Exception:
+        return set()
+
+    pids: set[int] = set()
+    try:
+        desktop = Atspi.get_desktop(0)
+
+        def walk(obj, depth: int = 0) -> None:
+            if depth > 20:
+                return
+            try:
+                state = obj.get_state_set()
+                role = obj.get_role_name()
+                if state.contains(Atspi.StateType.FOCUSED) or (
+                    role in ("frame", "window") and state.contains(Atspi.StateType.ACTIVE)
+                ):
+                    pid = int(obj.get_process_id())
+                    if pid > 0:
+                        pids.add(pid)
+                for index in range(obj.get_child_count()):
+                    child = obj.get_child_at_index(index)
+                    if child:
+                        walk(child, depth + 1)
+            except Exception:
+                return
+
+        walk(desktop)
+    except Exception:
+        return set()
+    return pids
+
+
+async def _gdbus_process_id(bus_name: str) -> int | None:
+    proc = await asyncio.create_subprocess_exec(
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.freedesktop.DBus",
+        "--object-path",
+        "/org/freedesktop/DBus",
+        "--method",
+        "org.freedesktop.DBus.GetConnectionUnixProcessID",
+        bus_name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=0.5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return None
+    if proc.returncode != 0:
+        return None
+    match = re.search(rb"\b(\d+)\b", stdout)
+    return int(match.group(1)) if match else None
+
+
+async def _ghostty_window_paths() -> list[str]:
+    proc = await asyncio.create_subprocess_exec(
+        "gdbus",
+        "introspect",
+        "--xml",
+        "--session",
+        "--dest",
+        "com.mitchellh.ghostty",
+        "--object-path",
+        "/com/mitchellh/ghostty/window",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=0.5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return []
+    if proc.returncode != 0:
+        return []
+    names = re.findall(rb'<node name="([0-9]+)"', stdout)
+    return [f"/com/mitchellh/ghostty/window/{name.decode('ascii')}" for name in names]
 
 
 async def _reap_process(proc: asyncio.subprocess.Process) -> None:
@@ -160,15 +318,16 @@ async def _reap_process(proc: asyncio.subprocess.Process) -> None:
         pass
 
 
-async def _wait_linux_clipboard_text(expected: str) -> bool:
+async def _wait_linux_clipboard_text(expected: str, primary: bool = False) -> bool:
     deadline = asyncio.get_running_loop().time() + LINUX_CLIPBOARD_TIMEOUT
     last = ""
     while asyncio.get_running_loop().time() < deadline:
+        args = ["wl-paste", "--no-newline"]
+        if primary:
+            args.append("--primary")
+        args += ["--type", "text/plain"]
         proc = await asyncio.create_subprocess_exec(
-            "wl-paste",
-            "--no-newline",
-            "--type",
-            "text/plain",
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -252,6 +411,8 @@ async def _ydotool_type(text: str) -> bool:
 
 
 def _linux_combo_keycodes(combo: str) -> list[str]:
+    if combo == "shift-insert":
+        return [f"{KEY_LEFTSHIFT}:1", f"{KEY_INSERT}:1", f"{KEY_INSERT}:0", f"{KEY_LEFTSHIFT}:0"]
     if combo == "ctrl-shift-v":
         return [f"{KEY_LEFTCTRL}:1", f"{KEY_LEFTSHIFT}:1", f"{KEY_V}:1", f"{KEY_V}:0", f"{KEY_LEFTSHIFT}:0", f"{KEY_LEFTCTRL}:0"]
     return [f"{KEY_LEFTCTRL}:1", f"{KEY_V}:1", f"{KEY_V}:0", f"{KEY_LEFTCTRL}:0"]
@@ -295,12 +456,15 @@ def _ydotool_env() -> dict[str, str]:
 
 
 async def _wtype_paste(combo: str) -> bool:
-    args = ["wtype", "-M", "ctrl"]
-    if combo == "ctrl-shift-v":
-        args += ["-M", "shift", "v", "-m", "shift"]
+    if combo == "shift-insert":
+        args = ["wtype", "-M", "shift", "-k", "Insert", "-m", "shift"]
     else:
-        args += ["v"]
-    args += ["-m", "ctrl"]
+        args = ["wtype", "-M", "ctrl"]
+        if combo == "ctrl-shift-v":
+            args += ["-M", "shift", "v", "-m", "shift"]
+        else:
+            args += ["v"]
+        args += ["-m", "ctrl"]
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdout=asyncio.subprocess.DEVNULL,

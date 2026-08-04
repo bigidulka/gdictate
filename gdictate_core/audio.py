@@ -132,16 +132,16 @@ def find_best_microphone() -> Optional[dict]:
     if not inputs:
         return None
 
-    def score(source: dict) -> int:
+    current_default = get_default_source()
+
+    def score(source: dict) -> tuple[int, int]:
         name = source.get("name", "")
         state = source.get("state", "")
         if "snd_aloop" in name or name.startswith("gdictate_"):
-            return -1
-        if state == "RUNNING":
-            return 3
-        if state == "IDLE":
-            return 2
-        return 1
+            return (-1, 0)
+        default_score = 10 if name == current_default else 0
+        state_score = {"RUNNING": 3, "IDLE": 2}.get(state, 1)
+        return (default_score, state_score)
 
     return max(inputs, key=score)
 
@@ -214,8 +214,13 @@ def audio_router_label(linux_router: str = "pipewire-pulse", windows_speaker_inp
     return linux_router or "pipewire-pulse"
 
 
-def configure_audio_source(mode: str, linux_router: str = "pipewire-pulse", windows_speaker_input: str = "auto") -> AudioRouting:
-    """Select browser default capture source for current OS."""
+def configure_audio_source(
+    mode: str,
+    linux_router: str = "pipewire-pulse",
+    windows_speaker_input: str = "auto",
+    change_default: bool = True,
+) -> AudioRouting:
+    """Resolve a capture source; change the desktop default only for legacy engines."""
     if os.name == "nt":
         return _windows_audio_route(mode, windows_speaker_input)
 
@@ -229,10 +234,18 @@ def configure_audio_source(mode: str, linux_router: str = "pipewire-pulse", wind
 
     if mode == "mic":
         previous = get_default_source()
+        if not change_default:
+            best = find_best_microphone()
+            active = (best or {}).get("name")
+            if active:
+                print(f"[MIC] {(best or {}).get('desc', active)}", flush=True)
+            else:
+                print("[WARN] No physical microphone found", file=sys.stderr, flush=True)
+            return AudioRouting(mode=mode, router=linux_router, active_source=active)
         active = ensure_microphone()
         if active and previous != active:
             return AudioRouting(mode=mode, router=linux_router, previous_default_source=previous, active_source=active)
-        return AudioRouting(mode=mode, router=linux_router)
+        return AudioRouting(mode=mode, router=linux_router, active_source=active)
 
     try:
         previous = get_default_source()
@@ -270,21 +283,38 @@ def configure_audio_source(mode: str, linux_router: str = "pipewire-pulse", wind
             print(f"[WARN] Failed to create speaker source: {e.stderr.strip()}", file=sys.stderr, flush=True)
             return AudioRouting(mode=mode, router=linux_router)
 
-        if not _wait_for_source(speaker_source) or not set_default_source(speaker_source):
+        if not _wait_for_source(speaker_source):
             for module_id in reversed(module_ids):
                 subprocess.run(["pactl", "unload-module", module_id], capture_output=True)
             return AudioRouting(mode=mode, router=linux_router)
-        _wait_for_default_source(speaker_source)
-        print(f"[AUDIO] Set default source: speakers ({speaker_source})", flush=True)
-        return AudioRouting(mode=mode, router=linux_router, previous_default_source=previous, active_source=speaker_source, module_ids=module_ids)
+        if change_default and not set_default_source(speaker_source):
+            for module_id in reversed(module_ids):
+                subprocess.run(["pactl", "unload-module", module_id], capture_output=True)
+            return AudioRouting(mode=mode, router=linux_router)
+        if change_default:
+            _wait_for_default_source(speaker_source)
+        print(f"[AUDIO] Capture source: speakers ({speaker_source})", flush=True)
+        return AudioRouting(
+            mode=mode,
+            router=linux_router,
+            previous_default_source=previous if change_default else None,
+            active_source=speaker_source,
+            module_ids=module_ids,
+        )
 
     unload_stale_audio_modules()
     previous = get_default_source()
     mic = find_best_microphone()
     if not mic:
         print("[WARN] No microphone found; using speakers only", file=sys.stderr, flush=True)
-        set_default_source(speaker_monitor)
-        return AudioRouting(mode=mode, router=linux_router, previous_default_source=previous, active_source=speaker_monitor)
+        if change_default:
+            set_default_source(speaker_monitor)
+        return AudioRouting(
+            mode=mode,
+            router=linux_router,
+            previous_default_source=previous if change_default else None,
+            active_source=speaker_monitor,
+        )
 
     module_ids = []
     try:
@@ -314,15 +344,21 @@ def configure_audio_source(mode: str, linux_router: str = "pipewire-pulse", wind
         print(f"[WARN] Mixed source did not appear: {mixed_source}", file=sys.stderr, flush=True)
         return AudioRouting(mode=mode, router=linux_router)
 
-    if not set_default_source(mixed_source):
+    if change_default and not set_default_source(mixed_source):
         for module_id in reversed(module_ids):
             subprocess.run(["pactl", "unload-module", module_id], capture_output=True)
         return AudioRouting(mode=mode, router=linux_router)
-    if not _wait_for_default_source(mixed_source):
+    if change_default and not _wait_for_default_source(mixed_source):
         for module_id in reversed(module_ids):
             subprocess.run(["pactl", "unload-module", module_id], capture_output=True)
         print(f"[WARN] Default source did not switch to {mixed_source}", file=sys.stderr, flush=True)
         return AudioRouting(mode=mode, router=linux_router)
 
-    print(f"[AUDIO] Set default source: mic + speakers ({mixed_source})", flush=True)
-    return AudioRouting(mode=mode, router=linux_router, previous_default_source=previous, active_source=mixed_source, module_ids=module_ids)
+    print(f"[AUDIO] Capture source: mic + speakers ({mixed_source})", flush=True)
+    return AudioRouting(
+        mode=mode,
+        router=linux_router,
+        previous_default_source=previous if change_default else None,
+        active_source=mixed_source,
+        module_ids=module_ids,
+    )

@@ -30,8 +30,8 @@ impl Default for BindingSettings {
         Self {
             mode: "dual-hold".into(),
             toggle: "CTRL+ALT".into(),
-            mic_hold: "ALT+LEFT".into(),
-            speakers_hold: "ALT+RIGHT".into(),
+            mic_hold: "F8".into(),
+            speakers_hold: "F9".into(),
             linux_backend: "de-shortcut+evdev".into(),
         }
     }
@@ -50,7 +50,7 @@ impl Default for AudioSettings {
     fn default() -> Self {
         Self {
             source: "mic".into(),
-            restore_default_after_start: true,
+            restore_default_after_start: false,
             linux_router: "pipewire-pulse".into(),
             windows_speaker_input: "auto".into(),
         }
@@ -71,7 +71,7 @@ impl Default for PasteSettings {
         Self {
             mode: "auto".into(),
             live: true,
-            linux_terminal_combo: "ctrl-shift-v".into(),
+            linux_terminal_combo: "shift-insert".into(),
             windows_combo: "ctrl-v".into(),
         }
     }

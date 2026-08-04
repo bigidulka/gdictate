@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 import sys
 import tempfile
@@ -15,8 +17,10 @@ from gdictate_core import paste as paste_module
 from gdictate_core.app import Dictation
 from gdictate_core.chrome import chrome_profile_dir, is_browser_configured
 from gdictate_core.file_jobs import FileTranscriptionResult, FileTranscriptionSegment, export_transcription
+from gdictate_core.cli import migrate_legacy_hotkey_service
 from gdictate_core.install_assets import install_user_assets, user_install_plan
-from gdictate_core.hotkeys import _binding_groups, _is_pressed
+from gdictate_core.hotkeys import _binding_groups, _hold_keyboards, _is_pressed
+from gdictate_core.ipc import ControlServer, _history_safe, control_token, get_status
 from gdictate_core.models import State, TranscriptResult
 from gdictate_core.paste import _linux_combo_keycodes
 from gdictate_core.platforms import chrome_candidates
@@ -61,11 +65,16 @@ class InstallAssetsTests(unittest.TestCase):
                 )
                 self.assertIn("--daemon --no-ui", startup.read_text(encoding="utf-8"))
             else:
-                self.assertEqual(len(plan.assets), 4)
+                self.assertEqual(len(plan.assets), 2)
                 service = home / ".config" / "systemd" / "user" / "gdictate-daemon.service"
-                self.assertIn("--daemon --no-ui", service.read_text(encoding="utf-8"))
-                hotkeys_service = home / ".config" / "systemd" / "user" / "gdictate-hotkeys.service"
-                self.assertIn("--daemon-hotkeys", hotkeys_service.read_text(encoding="utf-8"))
+                service_text = service.read_text(encoding="utf-8")
+                self.assertIn("gdictate.py --daemon\n", service_text)
+                self.assertNotIn("--no-ui", service_text)
+                self.assertIn("NoNewPrivileges=true", service_text)
+                if (home / ".config" / "gdictate" / "transcriber.env").exists():
+                    self.assertIn("EnvironmentFile=-%h/.config/gdictate/transcriber.env", service_text)
+                self.assertNotIn("gdictate-hotkeys.service", "\n".join(plan.actions))
+                self.assertIn("systemctl --user restart gdictate-daemon.service", "\n".join(plan.actions))
 
 
 class ExportTranscriptionTests(unittest.TestCase):
@@ -95,6 +104,92 @@ class ExportTranscriptionTests(unittest.TestCase):
             self.assertTrue(Path(files["vtt"]).read_text(encoding="utf-8").startswith("WEBVTT"))
 
 
+class IpcAuthTests(unittest.IsolatedAsyncioTestCase):
+    def test_retained_event_sanitizer_removes_nested_transcript_fields(self) -> None:
+        event = {
+            "type": "file.job",
+            "text": "top-level secret",
+            "job": {"result": {"text": "nested secret", "segments": [{"text": "segment secret"}]}},
+        }
+        self.assertEqual(_history_safe(event), {"type": "file.job", "job": {"result": {}}})
+
+    async def test_control_http_and_websocket_require_token(self) -> None:
+        import aiohttp
+
+        class FakeDictation:
+            def status(self) -> dict:
+                return {"state": "idle"}
+
+            async def close(self) -> None:
+                return None
+
+        previous = os.environ.get("GDICTATE_CONTROL_TOKEN")
+        os.environ["GDICTATE_CONTROL_TOKEN"] = "test-control-token"
+        server = ControlServer(FakeDictation(), port=0)  # type: ignore[arg-type]
+        try:
+            await server.start()
+            sites = list(server._runner.sites) if server._runner else []  # type: ignore[union-attr]
+            sock = next(iter(sites[0]._server.sockets))  # type: ignore[union-attr]
+            port = sock.getsockname()[1]
+            async with aiohttp.ClientSession() as session:
+                response = await session.get(f"http://127.0.0.1:{port}/status")
+                self.assertEqual(response.status, 401)
+                response = await session.get(
+                    f"http://127.0.0.1:{port}/status",
+                    headers={"Authorization": "Bearer test-control-token"},
+                )
+                self.assertEqual(response.status, 200)
+                status_payload = await response.json()
+                self.assertEqual(status_payload["ipc_version"], 2)
+                with self.assertRaises(aiohttp.WSServerHandshakeError):
+                    await session.ws_connect(f"http://127.0.0.1:{port}/events")
+                ws = await session.ws_connect(
+                    f"http://127.0.0.1:{port}/events",
+                    protocols=("gdictate", "test-control-token"),
+                )
+                await ws.close()
+        finally:
+            await server.close()
+            if previous is None:
+                os.environ.pop("GDICTATE_CONTROL_TOKEN", None)
+            else:
+                os.environ["GDICTATE_CONTROL_TOKEN"] = previous
+
+
+class LegacyHotkeyMigrationTests(unittest.TestCase):
+    def test_legacy_hotkey_unit_is_disabled_removed_and_reloaded(self) -> None:
+        import gdictate_core.cli as cli_module
+
+        with temporary_directory() as raw_home:
+            home = Path(raw_home)
+            unit = home / ".config" / "systemd" / "user" / "gdictate-hotkeys.service"
+            unit.parent.mkdir(parents=True)
+            unit.write_text("legacy", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            class Result:
+                stdout = "gdictate-hotkeys.service enabled\n"
+
+            original_which = cli_module.shutil.which
+            original_run = cli_module.subprocess.run
+            cli_module.shutil.which = lambda name: "/usr/bin/systemctl" if name == "systemctl" else None
+
+            def fake_run(args, **_kwargs):
+                calls.append(list(args))
+                return Result()
+
+            cli_module.subprocess.run = fake_run
+            try:
+                migrate_legacy_hotkey_service(home)
+            finally:
+                cli_module.shutil.which = original_which
+                cli_module.subprocess.run = original_run
+
+            self.assertFalse(unit.exists())
+            self.assertIn(["systemctl", "--user", "disable", "--now", "gdictate-hotkeys.service"], calls)
+            self.assertIn(["systemctl", "--user", "daemon-reload"], calls)
+
+
 class PreflightTests(unittest.TestCase):
     def test_preflight_contains_required_checks(self) -> None:
         report = preflight_report()
@@ -114,6 +209,11 @@ class PreflightTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
+    def test_public_dictation_export_is_lazy_and_compatible(self) -> None:
+        import gdictate_core
+
+        self.assertIs(gdictate_core.Dictation, Dictation)
+
     def test_schema_defaults_and_reset_are_consistent(self) -> None:
         with temporary_directory() as raw_out:
             path = Path(raw_out) / "settings.json"
@@ -148,6 +248,9 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(fields["engine.name"].options, ["chrome", "chatgpt", "openai"])
         self.assertEqual(AppSettings().bind.mic_hold, "F8")
         self.assertEqual(AppSettings().bind.speakers_hold, "F9")
+        rust_settings = (Path(__file__).resolve().parents[1] / "src-tauri" / "src" / "settings.rs").read_text(encoding="utf-8")
+        self.assertIn('mic_hold: "F8".into()', rust_settings)
+        self.assertIn('speakers_hold: "F9".into()', rust_settings)
         self.assertEqual(fields["transcriber.endpoint"].default, "http://127.0.0.1:37182/v1/audio/transcriptions")
         self.assertIn("edge", fields["chrome.channel"].options)
         self.assertTrue(chrome_candidates("chromium"))
@@ -174,6 +277,49 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(route.router, expected_router)
         self.assertIsNone(route.active_source)
 
+    def test_native_capture_does_not_require_default_source_switch(self) -> None:
+        import gdictate_core.audio as audio_module
+
+        original_default = audio_module.get_default_source
+        original_best = audio_module.find_best_microphone
+        original_set = audio_module.set_default_source
+        audio_module.get_default_source = lambda: "current-mic"
+        audio_module.find_best_microphone = lambda: {"name": "other-mic", "desc": "Other"}
+        audio_module.set_default_source = lambda _name: self.fail("default source changed")
+        try:
+            route = configure_audio_source("mic", change_default=False)
+        finally:
+            audio_module.get_default_source = original_default
+            audio_module.find_best_microphone = original_best
+            audio_module.set_default_source = original_set
+        self.assertEqual(route.active_source, "other-mic")
+        self.assertIsNone(route.previous_default_source)
+
+    def test_native_both_without_microphone_does_not_change_default(self) -> None:
+        import gdictate_core.audio as audio_module
+
+        originals = {
+            "get_default_source": audio_module.get_default_source,
+            "get_default_sink": audio_module.get_default_sink,
+            "source_names": audio_module.source_names,
+            "find_best_microphone": audio_module.find_best_microphone,
+            "set_default_source": audio_module.set_default_source,
+            "unload_stale_audio_modules": audio_module.unload_stale_audio_modules,
+        }
+        audio_module.get_default_source = lambda: "current-mic"
+        audio_module.get_default_sink = lambda: "speaker"
+        audio_module.source_names = lambda: {"speaker.monitor"}
+        audio_module.find_best_microphone = lambda: None
+        audio_module.set_default_source = lambda _name: self.fail("default source changed")
+        audio_module.unload_stale_audio_modules = lambda: None
+        try:
+            route = configure_audio_source("both", change_default=False)
+        finally:
+            for name, value in originals.items():
+                setattr(audio_module, name, value)
+        self.assertEqual(route.active_source, "speaker.monitor")
+        self.assertIsNone(route.previous_default_source)
+
     def test_tauri_settings_ui_matches_core_schema(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "src" / "App.tsx").read_text(encoding="utf-8")
         fields = [field for group in settings_schema() for field in group.fields]
@@ -199,6 +345,14 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('await call<string>("close_overlay"', source)
         self.assertIn('await call<string>("daemon_shutdown"', source)
         self.assertIn('await call<string>("daemon_spawn"', source)
+        self.assertNotIn('daemonCommand("evdev_hotkeys_spawn")', source)
+        self.assertNotIn("setFinalText", source)
+        self.assertNotIn("setEvents", source)
+        tauri_source = (Path(__file__).resolve().parents[1] / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
+        self.assertIn('"--user", "start", "gdictate-daemon.service"', tauri_source)
+        self.assertNotIn('.arg("--daemon-hotkeys")', tauri_source)
+        quit_block = tauri_source.split('"quit" => {', 1)[1].split("}", 1)[0]
+        self.assertNotIn("--shutdown", quit_block)
 
     def test_linux_package_metadata_includes_core_runtime_deps(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -225,6 +379,7 @@ class SettingsTests(unittest.TestCase):
 
 class HotkeyParsingTests(unittest.TestCase):
     class Codes:
+        EV_KEY = 1
         KEY_LEFTCTRL = 29
         KEY_RIGHTCTRL = 97
         KEY_LEFTALT = 56
@@ -249,9 +404,24 @@ class HotkeyParsingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown evdev key"):
             _binding_groups("ALT+NOT_A_KEY", self.Codes)
 
+    def test_virtual_keyboards_are_excluded(self) -> None:
+        codes = self.Codes
+
+        class Device:
+            def __init__(self, name: str):
+                self.name = name
+
+            def capabilities(self):
+                return {codes.EV_KEY: [codes.KEY_F8, codes.KEY_F9]}
+
+        devices = [Device("ydotoold virtual device"), Device("AT Translated Set 2 keyboard")]
+        keyboards = _hold_keyboards(devices, [_binding_groups("F8", codes)], codes)
+        self.assertEqual([device.name for device in keyboards], ["AT Translated Set 2 keyboard"])
+
 
 class PasteTests(unittest.TestCase):
     def test_linux_combo_keycodes(self) -> None:
+        self.assertEqual(_linux_combo_keycodes("shift-insert"), ["42:1", "110:1", "110:0", "42:0"])
         self.assertEqual(_linux_combo_keycodes("ctrl-v"), ["29:1", "47:1", "47:0", "29:0"])
         self.assertEqual(
             _linux_combo_keycodes("ctrl-shift-v"),
@@ -282,6 +452,43 @@ class PasteBackendTests(unittest.IsolatedAsyncioTestCase):
         finally:
             paste_module._copy_linux = original_copy
             paste_module._ydotool_type = original_type
+
+    async def test_shift_insert_sets_primary_clipboard_best_effort(self) -> None:
+        calls: list[tuple[str, bool]] = []
+
+        async def fake_copy(_text: str, primary: bool = False) -> bool:
+            calls.append(("copy", primary))
+            return not primary
+
+        async def fake_release() -> None:
+            return None
+
+        async def fake_sleep(_seconds: float) -> None:
+            return None
+
+        async def fake_paste(combo: str) -> bool:
+            calls.append(("paste", combo == "shift-insert"))
+            return True
+
+        original_copy = paste_module._copy_linux
+        original_release = paste_module._release_linux_virtual_modifiers
+        original_paste = paste_module._ydotool_paste
+        original_modifiers = paste_module._wait_linux_modifiers_released
+        original_sleep = asyncio.sleep
+        paste_module._copy_linux = fake_copy
+        paste_module._release_linux_virtual_modifiers = fake_release
+        paste_module._ydotool_paste = fake_paste
+        paste_module._wait_linux_modifiers_released = fake_release
+        asyncio.sleep = fake_sleep  # type: ignore[assignment]
+        try:
+            self.assertTrue(await paste_module._paste_linux("привет", "ydotool", "shift-insert"))
+            self.assertEqual(calls, [("copy", False), ("copy", True), ("paste", True)])
+        finally:
+            paste_module._copy_linux = original_copy
+            paste_module._release_linux_virtual_modifiers = original_release
+            paste_module._ydotool_paste = original_paste
+            paste_module._wait_linux_modifiers_released = original_modifiers
+            asyncio.sleep = original_sleep  # type: ignore[assignment]
 
     async def test_clipboard_readback_failure_still_pastes(self) -> None:
         calls: list[str] = []

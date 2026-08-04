@@ -120,7 +120,8 @@ class SpeechProxy:
     async def _handle_message(self, data: dict) -> None:
         msg_type = data.get("type")
         if self._debug:
-            print(f"  [WS] {data}", flush=True)
+            safe = {key: (f"<{len(value)} chars>" if key == "text" and isinstance(value, str) else value) for key, value in data.items()}
+            print(f"  [WS] {safe}", flush=True)
 
         if msg_type == "ready":
             return
@@ -252,7 +253,7 @@ class SpeechProxy:
                 break
             text = line.decode("utf-8", errors="replace").strip()
             if text and any(term in text.lower() for term in ("speech", "audio", "mic", "permission")):
-                print(f"  [CHROME] {text}", flush=True)
+                print(f"  [CHROME] diagnostic line ({len(text)} chars)", flush=True)
 
     async def wait_ready(self, timeout: float = 15.0) -> None:
         await asyncio.wait_for(self._ready.wait(), timeout=timeout)

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
+from .audio_capture import PipeWireCapture
 from .models import TranscriptResult
 
 
@@ -55,14 +55,16 @@ class OpenAICompatibleSpeechEngine:
         self.health_check = health_check
         self._on_transcript = None
         self._started = asyncio.Event()
-        self._recording: Optional[asyncio.subprocess.Process] = None
+        self._capture: Optional[PipeWireCapture] = None
         self._audio_path: Optional[Path] = None
+        self.capture_source: Optional[str] = None
+        self.on_audio_path: Optional[Callable[[Optional[Path]], None]] = None
 
     async def start(self, on_transcript=None) -> None:
         if not self.endpoint:
             raise RuntimeError("OpenAI-compatible transcription endpoint is not configured")
-        if not shutil.which("parec"):
-            raise RuntimeError("parec is required for OpenAI-compatible dictation capture")
+        if not PipeWireCapture.available():
+            raise RuntimeError("pw-record is required for native PipeWire dictation capture")
         self._on_transcript = on_transcript
 
     async def wait_ready(self, timeout: float = 15.0) -> None:
@@ -81,44 +83,35 @@ class OpenAICompatibleSpeechEngine:
         await asyncio.wait_for(self._started.wait(), timeout=timeout)
 
     async def start_recognition(self) -> None:
-        if self._recording and self._recording.returncode is None:
+        if self._capture and self._capture.process and self._capture.process.returncode is None:
             return
         self._started.clear()
         handle = tempfile.NamedTemporaryFile(prefix="gdictate-", suffix=".wav", delete=False)
         handle.close()
         self._audio_path = Path(handle.name)
-        self._recording = await asyncio.create_subprocess_exec(
-            "parec",
-            "--file-format=wav",
-            "--rate=48000",
-            "--channels=1",
-            "--device=@DEFAULT_SOURCE@",
-            str(self._audio_path),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE if self.debug else asyncio.subprocess.DEVNULL,
+        self._capture = PipeWireCapture(
+            self._audio_path,
+            self.capture_source,
+            rate=48000,
+            channels=1,
+            debug=self.debug,
         )
-        await asyncio.sleep(0.08)
-        if self._recording.returncode is not None:
-            message = "parec exited before recording started"
-            if self.debug and self._recording.stderr:
-                message = (await self._recording.stderr.read()).decode("utf-8", errors="replace").strip() or message
+        try:
+            await self._capture.start()
+        except Exception:
+            self._capture = None
             await self._cleanup_audio()
-            raise RuntimeError(message)
+            raise
+        if self.on_audio_path:
+            self.on_audio_path(self._audio_path)
         self._started.set()
-        print("[OPENAI] Recording audio", flush=True)
+        print(f"[PIPEWIRE] Recording {self.capture_source or '@DEFAULT_AUDIO_SOURCE@'}", flush=True)
 
     async def stop_recognition(self) -> None:
-        proc = self._recording
-        self._recording = None
-        if not proc:
+        capture, self._capture = self._capture, None
+        if not capture:
             return
-        if proc.returncode is None:
-            proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+        await capture.stop()
         if not self._audio_path or not self._audio_path.exists() or self._audio_path.stat().st_size < 128:
             await self._cleanup_audio()
             raise RuntimeError("recorded audio is empty")
@@ -137,6 +130,9 @@ class OpenAICompatibleSpeechEngine:
         form.add_field("response_format", "json")
         headers = {}
         api_key = os.environ.get(self.api_key_env) if self.api_key_env else None
+        parsed_endpoint = urlsplit(self.endpoint)
+        if api_key and parsed_endpoint.scheme != "https" and parsed_endpoint.hostname not in ("127.0.0.1", "::1", "localhost"):
+            raise RuntimeError("refusing to send transcription API key over non-loopback HTTP")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         timeout = aiohttp.ClientTimeout(total=float(self.timeout_seconds))
@@ -167,6 +163,8 @@ class OpenAICompatibleSpeechEngine:
         return text.strip()
 
     async def _cleanup_audio(self) -> None:
+        if self.on_audio_path:
+            self.on_audio_path(None)
         path, self._audio_path = self._audio_path, None
         if path:
             try:
@@ -175,15 +173,9 @@ class OpenAICompatibleSpeechEngine:
                 pass
 
     async def close(self) -> None:
-        proc = self._recording
-        self._recording = None
-        if proc and proc.returncode is None:
-            proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=1.0)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+        capture, self._capture = self._capture, None
+        if capture:
+            await capture.close()
         await self._cleanup_audio()
 
 

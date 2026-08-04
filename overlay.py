@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import json
-import math
 import os
-import shutil
 import subprocess
 import sys
 import threading
 import time
-from array import array
 from pathlib import Path
 from typing import Any
 
@@ -20,37 +17,43 @@ class OverlayPopup:
         self.position = position
         self._proc: subprocess.Popen[str] | None = None
         self._send_lock = threading.Lock()
-        self._level_proc: subprocess.Popen[bytes] | None = None
-        self._level_stop = threading.Event()
+        self._idle_timer: threading.Timer | None = None
 
     def _ensure_child(self) -> None:
-        if self._proc and self._proc.poll() is None:
-            return
-        env = os.environ.copy()
-        env.setdefault("QT_QPA_PLATFORM", "xcb")
-        self._proc = subprocess.Popen(
-            [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                "--popup-child",
-                json.dumps(
-                    {
-                        "click_through": self.click_through,
-                        "show_interim": self.show_interim_enabled,
-                        "position": self.position,
-                    },
-                    ensure_ascii=False,
-                ),
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            env=env,
-        )
+        with self._send_lock:
+            if self._proc and self._proc.poll() is None:
+                return
+            env = os.environ.copy()
+            if env.get("XDG_SESSION_TYPE") == "wayland" and env.get("WAYLAND_DISPLAY"):
+                env["QT_QPA_PLATFORM"] = "wayland"
+            else:
+                env.setdefault("QT_QPA_PLATFORM", "xcb")
+            self._proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "--popup-child",
+                    json.dumps(
+                        {
+                            "click_through": self.click_through,
+                            "show_interim": self.show_interim_enabled,
+                            "position": self.position,
+                        },
+                        ensure_ascii=False,
+                    ),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                env=env,
+            )
 
     def _send(self, payload: dict[str, Any]) -> None:
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            self._idle_timer = None
         self._ensure_child()
         if not self._proc or not self._proc.stdin:
             return
@@ -62,22 +65,51 @@ class OverlayPopup:
             self._proc = None
 
     def show_recording_start(self, label: str = "", source_name: str | None = None) -> None:
-        self._start_level_monitor(source_name)
         self._send({"type": "start", "label": label})
 
     def show_interim(self, text: str) -> None:
         if self.show_interim_enabled:
             self._send({"type": "text", "text": text})
 
+    def show_level(self, level: float) -> None:
+        self._send({"type": "level", "level": level})
+
+    def show_transcribing(self) -> None:
+        self._send({"type": "transcribing"})
+
+    def show_error(self, text: str) -> None:
+        self._send({"type": "error", "text": text})
+
     def show_final(self, _text: str) -> None:
         self.hide_popup()
 
     def hide_popup(self) -> None:
-        self._stop_level_monitor()
         self._send({"type": "hide"})
+        self._idle_timer = threading.Timer(8.0, self._stop_idle_child)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+
+    def _stop_idle_child(self) -> None:
+        with self._send_lock:
+            proc = self._proc
+            self._proc = None
+            if not proc:
+                return
+            try:
+                if proc.stdin:
+                    proc.stdin.write(json.dumps({"type": "quit"}) + "\n")
+                    proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
 
     def close(self) -> None:
-        self._stop_level_monitor()
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            self._idle_timer = None
         if not self._proc:
             return
         self._send({"type": "quit"})
@@ -86,60 +118,6 @@ class OverlayPopup:
         except subprocess.TimeoutExpired:
             self._proc.terminate()
         self._proc = None
-
-    def _start_level_monitor(self, source_name: str | None) -> None:
-        self._stop_level_monitor()
-        if not source_name or not shutil.which("parec"):
-            return
-        self._level_stop.clear()
-        try:
-            self._level_proc = subprocess.Popen(
-                [
-                    "parec",
-                    "--raw",
-                    "--format=s16le",
-                    "--rate=16000",
-                    "--channels=1",
-                    "--latency-msec=50",
-                    "--device",
-                    source_name,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError:
-            self._level_proc = None
-            return
-        threading.Thread(target=self._read_levels, daemon=True).start()
-
-    def _stop_level_monitor(self) -> None:
-        self._level_stop.set()
-        proc = self._level_proc
-        self._level_proc = None
-        if proc and proc.poll() is None:
-            proc.terminate()
-
-    def _read_levels(self) -> None:
-        proc = self._level_proc
-        if not proc or not proc.stdout:
-            return
-        smooth = 0.0
-        while not self._level_stop.is_set() and proc.poll() is None:
-            chunk = proc.stdout.read(1600)
-            if not chunk:
-                break
-            samples = array("h")
-            samples.frombytes(chunk)
-            if sys.byteorder != "little":
-                samples.byteswap()
-            if not samples:
-                continue
-            rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768.0
-            peak = max(abs(sample) for sample in samples) / 32768.0
-            level = min(1.0, max(rms * 85.0, peak * 8.0))
-            smooth = smooth * 0.55 + level * 0.45
-            self._send({"type": "level", "level": smooth})
-
 
 def _run_child(raw_config: str) -> int:
     from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
@@ -158,7 +136,13 @@ def _run_child(raw_config: str) -> int:
             self.levels = [0.0] * 13
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.tick)
-            self.timer.start(45)
+
+        def start_animation(self) -> None:
+            if not self.timer.isActive():
+                self.timer.start(45)
+
+        def stop_animation(self) -> None:
+            self.timer.stop()
 
         def tick(self) -> None:
             self.levels = [level * 0.92 for level in self.levels]
@@ -196,6 +180,7 @@ def _run_child(raw_config: str) -> int:
             self.started = time.monotonic()
             self.visible_text = ""
             self.active = False
+            self.transcribing = False
 
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -228,15 +213,18 @@ def _run_child(raw_config: str) -> int:
 
             top = QHBoxLayout()
             top.setSpacing(9)
-            dot = QLabel()
-            dot.setFixedSize(10, 10)
-            dot.setStyleSheet("background: #ff3347; border-radius: 5px;")
-            top.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.dot = QLabel()
+            self.dot.setFixedSize(10, 10)
+            self.dot.setStyleSheet("background: #ff3347; border-radius: 5px;")
+            top.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
             self.wave = Wave()
             top.addWidget(self.wave, 0, Qt.AlignmentFlag.AlignVCenter)
             self.clock = QLabel("00:00")
             self.clock.setStyleSheet("font: 700 12px monospace; color: rgba(255,255,255,180);")
             top.addWidget(self.clock, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.status = QLabel("REC")
+            self.status.setStyleSheet("font: 700 11px monospace; color: rgba(255,255,255,180);")
+            top.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
             top.addStretch(1)
             layout.addLayout(top)
 
@@ -249,16 +237,22 @@ def _run_child(raw_config: str) -> int:
 
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.update_clock)
-            self.timer.start(200)
 
         def handle(self, payload: dict) -> None:
             kind = payload.get("type")
             if kind == "start":
                 self.active = True
+                self.transcribing = False
                 self.started = time.monotonic()
                 self.visible_text = ""
                 self.text.setText(self.visible_text)
                 self.text.hide()
+                self.dot.setStyleSheet("background: #ff3347; border-radius: 5px;")
+                self.status.setText("REC")
+                self.wave.show()
+                self.wave.start_animation()
+                self.clock.show()
+                self.timer.start(200)
                 self.update_clock()
                 self.adjustSize()
                 self.reposition()
@@ -272,11 +266,45 @@ def _run_child(raw_config: str) -> int:
                 self.adjustSize()
                 self.reposition()
             elif kind == "level":
-                if not self.active:
+                if not self.active or self.transcribing:
                     return
                 self.wave.set_level(float(payload.get("level") or 0.0))
+            elif kind == "transcribing":
+                if not self.active:
+                    return
+                self.transcribing = True
+                self.dot.setStyleSheet("background: #58a6ff; border-radius: 5px;")
+                self.status.setText("STT…")
+                self.wave.hide()
+                self.wave.stop_animation()
+                self.clock.hide()
+                self.timer.stop()
+                self.text.setText("Обработка записи…")
+                self.text.show()
+                self.adjustSize()
+                self.reposition()
+            elif kind == "error":
+                self.active = True
+                self.transcribing = False
+                self.dot.setStyleSheet("background: #ffb020; border-radius: 5px;")
+                self.status.setText("ERROR")
+                self.wave.hide()
+                self.wave.stop_animation()
+                self.clock.hide()
+                self.timer.stop()
+                self.text.setText(str(payload.get("text") or "Ошибка диктовки"))
+                self.text.show()
+                self.adjustSize()
+                self.reposition()
+                self.show()
             elif kind == "hide":
+                self.transcribing = False
                 self.active = False
+                self.visible_text = ""
+                self.text.clear()
+                self.text.hide()
+                self.wave.stop_animation()
+                self.timer.stop()
                 self.hide()
             elif kind == "quit":
                 QApplication.quit()

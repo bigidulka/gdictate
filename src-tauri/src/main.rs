@@ -4,7 +4,7 @@ mod system;
 use serde::Serialize;
 use settings::{load_settings_file, save_settings_file, AppSettings};
 use std::collections::HashSet;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -26,11 +26,6 @@ struct NativeHotkeys {
     warnings: Vec<String>,
 }
 
-#[derive(Default)]
-struct EvdevHotkeys {
-    child: Option<Child>,
-}
-
 #[derive(Clone)]
 struct DaemonSupervisor {
     enabled: Arc<AtomicBool>,
@@ -40,15 +35,6 @@ impl Default for DaemonSupervisor {
     fn default() -> Self {
         Self {
             enabled: Arc::new(AtomicBool::new(true)),
-        }
-    }
-}
-
-impl Drop for EvdevHotkeys {
-    fn drop(&mut self) {
-        if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
         }
     }
 }
@@ -262,6 +248,11 @@ fn daemon_status() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn daemon_control_token() -> Result<String, String> {
+    run_python(&["--print-control-token"])
+}
+
+#[tauri::command]
 fn daemon_start(app: AppHandle, source: String) -> Result<String, String> {
     set_daemon_supervisor(&app, true);
     ensure_daemon_ready()?;
@@ -287,61 +278,6 @@ fn daemon_toggle(app: AppHandle, source: Option<String>) -> Result<String, Strin
 fn daemon_shutdown(app: AppHandle) -> Result<String, String> {
     set_daemon_supervisor(&app, false);
     run_python(&["--shutdown"])
-}
-
-#[tauri::command]
-fn evdev_hotkeys_spawn(app: AppHandle) -> Result<String, String> {
-    spawn_evdev_hotkeys(&app)
-}
-
-fn spawn_evdev_hotkeys(app: &AppHandle) -> Result<String, String> {
-    ensure_daemon_ready()?;
-    let state = app.state::<Mutex<EvdevHotkeys>>();
-    let mut state = state.lock().unwrap();
-    if let Some(child) = state.child.as_mut() {
-        if child.try_wait().map_err(|err| err.to_string())?.is_none() {
-            return Ok("evdev bind listener already running".into());
-        }
-    }
-    let python = python_exe();
-    let script = python_script();
-    let mut child = Command::new(&python)
-        .arg(&script)
-        .arg("--daemon-hotkeys")
-        .arg("--parent-pid")
-        .arg(std::process::id().to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|err| err.to_string())?;
-    thread::sleep(Duration::from_millis(150));
-    if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
-        return Err(format!(
-            "evdev listener exited immediately with {status}; python={}; script={}",
-            python.display(),
-            script.display()
-        ));
-    }
-    state.child = Some(child);
-    Ok("evdev bind listener started".into())
-}
-
-#[tauri::command]
-fn evdev_hotkeys_stop(app: AppHandle) -> Result<String, String> {
-    stop_evdev_hotkeys(&app)
-}
-
-fn stop_evdev_hotkeys(app: &AppHandle) -> Result<String, String> {
-    let state = app.state::<Mutex<EvdevHotkeys>>();
-    let mut state = state.lock().unwrap();
-    if let Some(child) = state.child.as_mut() {
-        let _ = child.kill();
-        let _ = child.wait();
-        state.child = None;
-        return Ok("evdev bind listener stopped".into());
-    }
-    Ok("evdev bind listener not running".into())
 }
 
 #[tauri::command]
@@ -543,7 +479,6 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
                 let _ = run_python(&["--stop"]);
             }
             "quit" => {
-                let _ = run_python(&["--shutdown"]);
                 app.exit(0);
             }
             _ => {}
@@ -574,37 +509,27 @@ fn native_hotkey_report(app: &AppHandle) -> NativeHotkeyReport {
 }
 
 fn is_linux_wayland() -> bool {
-    cfg!(target_os = "linux")
-        && std::env::var("XDG_SESSION_TYPE")
-            .unwrap_or_default()
-            .eq_ignore_ascii_case("wayland")
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    std::env::var("XDG_SESSION_TYPE")
+        .map(|value| value.eq_ignore_ascii_case("wayland"))
+        .unwrap_or(false)
+        || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
-fn should_use_evdev_hotkeys(settings: &AppSettings) -> bool {
-    is_linux_wayland()
+fn sync_hotkey_backend(app: &AppHandle, settings: &AppSettings) -> NativeHotkeyReport {
+    let mut report = register_native_hotkeys(app, settings);
+    if is_linux_wayland()
         && settings.bind.mode == "dual-hold"
         && matches!(
             settings.bind.linux_backend.as_str(),
             "de-shortcut+evdev" | "evdev"
         )
-}
-
-fn sync_hotkey_backend(app: &AppHandle, settings: &AppSettings) -> NativeHotkeyReport {
-    let mut report = register_native_hotkeys(app, settings);
-    if should_use_evdev_hotkeys(settings) {
-        match spawn_evdev_hotkeys(app) {
-            Ok(message) => report.warnings.push(message),
-            Err(err) => {
-                eprintln!("[HOTKEY] evdev bind listener failed: {err}");
-                report
-                    .warnings
-                    .push(format!("evdev bind listener failed: {err}"));
-            }
-        }
-    } else {
-        if let Err(err) = stop_evdev_hotkeys(app) {
-            eprintln!("[HOTKEY] evdev bind listener stop failed: {err}");
-        }
+    {
+        report
+            .warnings
+            .push("evdev hold listener is integrated into the Python daemon".into());
     }
     report
 }
@@ -742,12 +667,20 @@ fn spawn_daemon_supervisor(app: &AppHandle) {
 }
 
 fn spawn_daemon_process() -> Result<(), String> {
+    if cfg!(target_os = "linux") {
+        let status = Command::new("systemctl")
+            .args(["--user", "start", "gdictate-daemon.service"])
+            .status();
+        if status.is_ok_and(|status| status.success()) {
+            return Ok(());
+        }
+    }
+
     let mut command = Command::new(python_exe());
     configure_python_command(&mut command);
     command
         .arg(python_script())
         .arg("--daemon")
-        .arg("--no-ui")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -930,7 +863,6 @@ fn run_python_json_result(args: &[&str]) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(Mutex::new(NativeHotkeys::default()))
-        .manage(Mutex::new(EvdevHotkeys::default()))
         .manage(DaemonSupervisor::default())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -975,12 +907,11 @@ pub fn run() {
             daemon_command,
             daemon_spawn,
             daemon_status,
+            daemon_control_token,
             daemon_start,
             daemon_stop,
             daemon_toggle,
             daemon_shutdown,
-            evdev_hotkeys_spawn,
-            evdev_hotkeys_stop,
             open_overlay,
             close_overlay,
             overlay_status,

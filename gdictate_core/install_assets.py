@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,7 +47,8 @@ def user_install_plan(home: Optional[Path] = None) -> UserInstallPlan:
 
 
 def install_user_assets(home: Optional[Path] = None) -> UserInstallResult:
-    plan = user_install_plan(home)
+    target_home = home or Path.home()
+    plan = user_install_plan(target_home)
     installed: list[str] = []
     warnings = list(plan.warnings)
     if not plan.installable:
@@ -60,6 +62,43 @@ def install_user_assets(home: Optional[Path] = None) -> UserInstallResult:
             path.chmod(path.stat().st_mode | 0o755)
         installed.append(str(path))
 
+    if os.name != "nt" and shutil.which("systemctl") and target_home.resolve() == Path.home().resolve():
+        legacy = target_home / ".config" / "systemd" / "user" / "gdictate-hotkeys.service"
+        subprocess.run(
+            ["systemctl", "--user", "disable", "--now", "gdictate-hotkeys.service"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if legacy.exists():
+            try:
+                legacy.unlink()
+                installed.append(str(legacy))
+            except OSError as exc:
+                warnings.append(f"failed to remove legacy hotkey unit: {exc}")
+        reload_result = subprocess.run(
+            ["systemctl", "--user", "daemon-reload"],
+            capture_output=True,
+            text=True,
+        )
+        if reload_result.returncode != 0:
+            warnings.append(reload_result.stderr.strip() or "systemd daemon-reload failed")
+        else:
+            enable_result = subprocess.run(
+                ["systemctl", "--user", "enable", "gdictate-daemon.service"],
+                capture_output=True,
+                text=True,
+            )
+            if enable_result.returncode != 0:
+                warnings.append(enable_result.stderr.strip() or "failed to enable gdictate-daemon.service")
+            else:
+                restart_result = subprocess.run(
+                    ["systemctl", "--user", "restart", "gdictate-daemon.service"],
+                    capture_output=True,
+                    text=True,
+                )
+                if restart_result.returncode != 0:
+                    warnings.append(restart_result.stderr.strip() or "failed to restart gdictate-daemon.service")
+
     return UserInstallResult(True, installed, warnings, plan.actions)
 
 
@@ -67,12 +106,14 @@ def _linux_plan(home: Path) -> UserInstallPlan:
     python = _python_command()
     gui_exec = _gui_command()
     service_path = home / ".config" / "systemd" / "user" / "gdictate-daemon.service"
-    hotkeys_service_path = home / ".config" / "systemd" / "user" / "gdictate-hotkeys.service"
     desktop_path = home / ".local" / "share" / "applications" / "gdictate.desktop"
-    autostart_path = home / ".config" / "autostart" / "gdictate.desktop"
     icon_path = PROJECT_DIR / "src-tauri" / "icons" / "icon.png"
 
     desktop_content = _desktop_entry(gui_exec, icon_path)
+    transcriber_env = home / ".config" / "gdictate" / "transcriber.env"
+    daemon_environment = (
+        "EnvironmentFile=-%h/.config/gdictate/transcriber.env\n" if transcriber_env.exists() else ""
+    )
     assets = [
         UserInstallAsset(
             id="systemd_user_service",
@@ -84,33 +125,25 @@ def _linux_plan(home: Path) -> UserInstallPlan:
             content=(
                 "[Unit]\n"
                 "Description=gdictate speech daemon\n"
-                "After=graphical-session.target pipewire.service pipewire-pulse.service\n\n"
+                "After=graphical-session.target pipewire.service pipewire-pulse.service\n"
+                "Before=gdictate-hotkeys.service\n"
+                "Conflicts=gdictate-hotkeys.service\n\n"
                 "[Service]\n"
+                f"{daemon_environment}"
                 f"WorkingDirectory={PROJECT_DIR}\n"
-                f"ExecStart={python} {PROJECT_DIR / 'gdictate.py'} --daemon --no-ui\n"
+                f"ExecStart={python} {PROJECT_DIR / 'gdictate.py'} --daemon\n"
                 "Restart=on-failure\n"
-                "RestartSec=2\n\n"
-                "[Install]\n"
-                "WantedBy=default.target\n"
-            ),
-        ),
-        UserInstallAsset(
-            id="systemd_hotkeys_service",
-            label="gdictate hotkeys user service",
-            path=str(hotkeys_service_path),
-            kind="systemd-user-service",
-            exists=hotkeys_service_path.exists(),
-            executable=False,
-            content=(
-                "[Unit]\n"
-                "Description=gdictate evdev hold hotkeys\n"
-                "After=graphical-session.target gdictate-daemon.service\n"
-                "Wants=gdictate-daemon.service\n\n"
-                "[Service]\n"
-                f"WorkingDirectory={PROJECT_DIR}\n"
-                f"ExecStart={python} {PROJECT_DIR / 'gdictate.py'} --daemon-hotkeys\n"
-                "Restart=on-failure\n"
-                "RestartSec=2\n\n"
+                "RestartSec=2\n"
+                "Nice=5\n"
+                "IOSchedulingClass=idle\n"
+                "NoNewPrivileges=true\n"
+                "PrivateTmp=true\n"
+                "ProtectSystem=strict\n"
+                "ProtectHome=read-only\n"
+                "ReadWritePaths=%h/.config/gdictate %h/.cache/gdictate\n"
+                "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\n"
+                "LockPersonality=true\n"
+                "UMask=0077\n\n"
                 "[Install]\n"
                 "WantedBy=default.target\n"
             ),
@@ -124,19 +157,11 @@ def _linux_plan(home: Path) -> UserInstallPlan:
             executable=False,
             content=desktop_content,
         ),
-        UserInstallAsset(
-            id="autostart_entry",
-            label="gdictate GUI autostart",
-            path=str(autostart_path),
-            kind="desktop-autostart",
-            exists=autostart_path.exists(),
-            executable=False,
-            content=desktop_content,
-        ),
     ]
     actions = [
         "systemctl --user daemon-reload",
-        "systemctl --user enable --now gdictate-daemon.service gdictate-hotkeys.service",
+        "systemctl --user enable gdictate-daemon.service",
+        "systemctl --user restart gdictate-daemon.service",
         "update-desktop-database ~/.local/share/applications  # optional",
     ]
     warnings: list[str] = []
@@ -195,7 +220,7 @@ def _gui_command() -> str:
     if release.exists():
         return str(release)
     installed = shutil.which("gdictate-app")
-    if installed and _is_packaged_project():
+    if installed:
         return installed
     return f"sh -lc 'cd {PROJECT_DIR} && npm run tauri:dev'"
 
